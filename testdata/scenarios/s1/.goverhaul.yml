@@ -1,0 +1,13 @@
+# Basic configuration for a typical layered architecture
+rules:
+  # Domain layer should not depend on infrastructure
+  - path: "internal/domain"
+    prohibited:
+      - name: "internal/infrastructure"
+        cause: "Domain should not depend on infrastructure"
+
+  # API layer should not access database directly
+  - path: "internal/api"
+    prohibited:
+      - name: "internal/database"
+        cause: "APIs should access database through domain services"

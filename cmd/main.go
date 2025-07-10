@@ -42,17 +42,17 @@ func main() {
 		}
 
 		// Check for specific error types
-		info, found := goverhaul.GetErrorInfo(err)
+		appErr, found := goverhaul.GetErrorInfo(err)
 		if found {
 			logger.Error("Command failed",
-				"error_type", info.Type)
+				"error_type", appErr.Type)
 
-			if info.Details != "" {
-				logger.Error("Additional details", "details", info.Details)
+			if appErr.Details != "" {
+				logger.Error("Additional details", "details", appErr.Details)
 			}
 
-			if info.File != "" {
-				logger.Error("File information", "file", info.File)
+			if appErr.File != "" {
+				logger.Error("File information", "file", appErr.File)
 			}
 		} else {
 			var violations *goverhaul.LintViolations
@@ -124,19 +124,19 @@ var rootCmd = &cobra.Command{
 				return err
 			}
 
-			info, found := goverhaul.GetErrorInfo(err)
+			appErr, found := goverhaul.GetErrorInfo(err)
 			if found {
 				// For application errors, provide more context
 				logger.Error("Linting failed",
 					"error", err.Error(),
-					"error_type", info.Type)
+					"error_type", appErr.Type)
 
-				if info.File != "" {
-					logger.Info("File information", "file", info.File)
+				if appErr.File != "" {
+					logger.Info("File information", "file", appErr.File)
 				}
 
-				if info.Details != "" {
-					logger.Info("Additional information", "details", info.Details)
+				if appErr.Details != "" {
+					logger.Info("Additional information", "details", appErr.Details)
 				}
 			} else {
 				logger.Error("Linting failed with unexpected error", "error", err)

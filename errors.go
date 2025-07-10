@@ -38,42 +38,18 @@ func (e *AppError) Error() string {
 	return fmt.Sprintf("[%s] %s", e.Type, e.Message)
 }
 
-// Unwrap implements the Go 1.13+ error unwrapping interface
 func (e *AppError) Unwrap() error {
 	return e.Err
 }
 
 // GetErrorInfo extracts error information from an error chain
-func GetErrorInfo(err error) (ErrorInfo, bool) {
+func GetErrorInfo(err error) (*AppError, bool) {
 	var appErr *AppError
 	if errors.As(err, &appErr) {
-		return ErrorInfo{
-			Type:    appErr.Type,
-			File:    appErr.File,
-			Details: appErr.Details,
-		}, true
+		return appErr, true
 	}
 
-	// For backward compatibility
-	var info ErrorInfo
-	if errors.As(err, &info) {
-		return info, info.Type != ""
-	}
-
-	return ErrorInfo{}, false
-}
-
-// ErrorInfo contains additional information about an error (legacy)
-// Kept for backward compatibility
-type ErrorInfo struct {
-	Type    ErrorType
-	File    string
-	Details string
-}
-
-// Error implements the error interface for ErrorInfo
-func (e ErrorInfo) Error() string {
-	return fmt.Sprintf("[%s]", e.Type)
+	return nil, false
 }
 
 // WithFile adds file information to an error
@@ -90,14 +66,7 @@ func WithFile(err error, file string) error {
 		}
 	}
 
-	// For backward compatibility
-	var info ErrorInfo
-	if errors.As(err, &info) {
-		info.File = file
-		return fmt.Errorf("%w", info)
-	}
-
-	// If it's not an AppError or ErrorInfo, wrap it in a new AppError
+	// If it's not an AppError, wrap it in a new AppError
 	return &AppError{
 		Type:    ErrorTypeFS, // Default type
 		Message: err.Error(),
@@ -120,14 +89,7 @@ func WithDetails(err error, details string) error {
 		}
 	}
 
-	// For backward compatibility
-	var info ErrorInfo
-	if errors.As(err, &info) {
-		info.Details = details
-		return fmt.Errorf("%w", info)
-	}
-
-	// If it's not an AppError or ErrorInfo, wrap it in a new AppError
+	// If it's not an AppError, wrap it in a new AppError
 	return &AppError{
 		Type:    ErrorTypeFS, // Default type
 		Message: err.Error(),

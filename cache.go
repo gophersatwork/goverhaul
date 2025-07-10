@@ -85,8 +85,10 @@ func (c *LintCache) AddFileWithViolations(path string, lv []LintViolation) error
 	return nil
 }
 
-var ErrEntryNotFound = errors.New("entry not found")
-var ErrReadingCachedViolations = errors.New("cached violations are invalid")
+var (
+	ErrEntryNotFound           = errors.New("entry not found")
+	ErrReadingCachedViolations = errors.New("cached violations are invalid")
+)
 
 func (c *LintCache) HasEntry(filePath string) (LintViolations, error) {
 	// Normalize the path for consistent caching
@@ -99,7 +101,8 @@ func (c *LintCache) HasEntry(filePath string) (LintViolations, error) {
 		}},
 	}
 
-	result, found, err := c.gCache.Get(key)
+	result, found, _ := c.gCache.Get(key)
+	var err error
 
 	if !found {
 		return LintViolations{}, ErrEntryNotFound

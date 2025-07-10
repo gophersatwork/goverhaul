@@ -46,7 +46,6 @@ func NewLinter(cfg Config, logger *slog.Logger, fs afero.Fs) (*Goverhaul, error)
 	}
 
 	return linter, nil
-
 }
 
 // Lint analyzes Go files in the given path for import rule violations

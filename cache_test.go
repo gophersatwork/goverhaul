@@ -4,10 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/gophersatwork/granular"
@@ -269,33 +266,4 @@ func NewCacheFs(t *testing.T, cacheDir string) afero.Fs {
 		t.Fatalf("Failed to create test directory: %v", err)
 	}
 	return memFs
-}
-
-func printDirTree(fs afero.Fs, path string) error {
-	err := afero.Walk(fs, path, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if p == path {
-			return nil
-		}
-
-		depth := strings.Count(p, string(os.PathSeparator))
-		indent := strings.Repeat("│   ", depth-1)
-
-		name := info.Name()
-		if info.IsDir() {
-			fmt.Printf("%s├── 📁 %s\n", indent, name)
-		} else {
-			fmt.Printf("%s├── 📄 %s\n", indent, name)
-		}
-
-		return nil
-	})
-	if err != nil {
-		log.Fatalf("Failed to inspect the folder: %v", err)
-	}
-
-	return nil
 }

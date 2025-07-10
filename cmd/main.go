@@ -5,8 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"path/filepath"
 
+	"github.com/alexrios/goverhaul"
 	"github.com/charmbracelet/fang"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -42,26 +42,25 @@ func main() {
 		}
 
 		// Check for specific error types
-		var appErr *AppError
-		if errors.As(err, &appErr) {
+		info, found := goverhaul.GetErrorInfo(err)
+		if found {
 			logger.Error("Command failed",
-				"error_type", appErr.Type,
-				"message", appErr.Message)
+				"error_type", info.Type)
 
-			if appErr.Details != "" {
-				logger.Error("Additional details", "details", appErr.Details)
+			if info.Details != "" {
+				logger.Error("Additional details", "details", info.Details)
 			}
 
-			if appErr.File != "" {
-				logger.Error("File information", "file", appErr.File)
+			if info.File != "" {
+				logger.Error("File information", "file", info.File)
 			}
 		} else {
-			var violations *LintViolations
+			var violations *goverhaul.LintViolations
 			if errors.As(err, &violations) {
 				logger.Error("Architecture rules violated",
 					"message", "The codebase contains imports that violate the defined architectural rules",
 					"details", violations.Error())
-			} else if errors.Is(err, ErrLint) {
+			} else if errors.Is(err, goverhaul.ErrLint) {
 				logger.Error("Architecture rules violated",
 					"message", "The codebase contains imports that violate the defined architectural rules")
 			} else {
@@ -102,15 +101,21 @@ var rootCmd = &cobra.Command{
 
 		fs := afero.NewOsFs() // real fs binding
 
-		cfg, err := LoadConfig(fs, cfgFile)
+		cfg, err := goverhaul.LoadConfig(fs, cfgFile)
 		if err != nil {
 			logger.Error("Failed to load configuration", "error", err)
 			return err
 		}
 
-		if err := Lint(path, cfg, logger); err != nil {
+		linter, err := goverhaul.NewLinter(cfg, logger, fs)
+		if err != nil {
+			logger.Error("Failed to initialize the linter", "error", err)
+			return err
+		}
+
+		if err := linter.Lint(path); err != nil {
 			// Handle different types of linting errors
-			var violations *LintViolations
+			var violations *goverhaul.LintViolations
 			if errors.As(err, &violations) {
 				// For lint violations, display the detailed error message with file information
 				logger.Error("Linting failed: architectural rules violated",
@@ -119,19 +124,19 @@ var rootCmd = &cobra.Command{
 				return err
 			}
 
-			var appErr *AppError
-			if errors.As(err, &appErr) {
+			info, found := goverhaul.GetErrorInfo(err)
+			if found {
 				// For application errors, provide more context
 				logger.Error("Linting failed",
-					"error", appErr.Error(),
-					"error_type", appErr.Type)
+					"error", err.Error(),
+					"error_type", info.Type)
 
-				if appErr.File != "" {
-					logger.Info("File information", "file", appErr.File)
+				if info.File != "" {
+					logger.Info("File information", "file", info.File)
 				}
 
-				if appErr.Details != "" {
-					logger.Info("Additional information", "details", appErr.Details)
+				if info.Details != "" {
+					logger.Info("Additional information", "details", info.Details)
 				}
 			} else {
 				logger.Error("Linting failed with unexpected error", "error", err)
@@ -151,13 +156,13 @@ func setupLogFile() (*os.File, error) {
 	}
 
 	// Create .goverhaul directory if it doesn't exist
-	goverhaulDir := filepath.Join(home, ".goverhaul")
+	goverhaulDir := goverhaul.JoinPaths(home, ".goverhaul")
 	if err := os.MkdirAll(goverhaulDir, 0o755); err != nil {
 		return nil, err
 	}
 
 	// Open log file
-	logFile := filepath.Join(goverhaulDir, "goverhaul.log")
+	logFile := goverhaul.JoinPaths(goverhaulDir, "goverhaul.log")
 	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, err

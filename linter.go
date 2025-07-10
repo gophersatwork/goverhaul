@@ -1,4 +1,4 @@
-package main
+package goverhaul
 
 import (
 	"errors"
@@ -6,10 +6,10 @@ import (
 	"go/token"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/gophersatwork/granular"
+	"github.com/spf13/afero"
 	"golang.org/x/mod/modfile"
 )
 
@@ -19,174 +19,256 @@ var (
 	ErrLint = errors.New("lint errors found")
 )
 
-func Lint(path string, cfg Config, logger *slog.Logger) error {
-	// Use the provided logger or create a default one
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
-		}))
+type Goverhaul struct {
+	cfg    Config
+	logger *slog.Logger
+	cache  *LintCache
+
+	fs afero.Fs
+}
+
+func NewLinter(cfg Config, logger *slog.Logger, fs afero.Fs) (*Goverhaul, error) {
+	linter := &Goverhaul{
+		fs:     fs,
+		cfg:    cfg,
+		logger: ensureLogger(logger),
 	}
 
 	// Load cache for incremental analysis if enabled
 	var cache LintCache
+	var err error
 	if cfg.Incremental {
-		cachePath := cfg.CacheFile
-		logger.Info("Using incremental analysis", "cache_file", cachePath)
-
-		// granular cache interactions
-		gCache, err := granular.New(cachePath)
+		cache, err = linter.initializeCache(cfg.CacheFile)
+		linter.cache = &cache
 		if err != nil {
-			return NewFSError("failed to load cache", err)
+			return nil, err
 		}
-		cache = LintCache{gCache: gCache}
 	}
 
-	// Create a violations collection to track all linting errors
-	violations := NewLintViolations()
+	return linter, nil
 
-	err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return NewFSError("error accessing path", err).
-				WithFile(path).
-				WithDetails("Check if the path exists and you have permission to access it")
-		}
+}
 
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".go") {
-			// Skip unchanged files if incremental analysis is enabled
-			if cfg.Incremental {
-				cachedViolations, err := cache.hasEntry(path)
-				if err != nil {
-					if errors.Is(err, ErrEntryNotFound) || errors.Is(err, ErrReadingCachedViolations) {
-						// just log and continue the linting. LintCache checking should not halt the main operation.
-						logger.Warn("Error checking file change status", "path", path, "error", err)
-					}
-				} else {
-					// File found in cache! Does it have previous violations?
-					// If it is the case, let's put it in the current violations list.
-					if !cachedViolations.IsEmpty() {
-						for _, v := range cachedViolations.Violations {
-							violations.Add(v)
-						}
-					}
-					logger.Debug("Skipping unchanged file", "path", path)
-					return nil
-				}
-			}
-
-			logger.Debug("Analyzing file", "path", path)
-			imports, err := getImports(path)
-			if err != nil {
-				logger.Error("Could not parse file", "path", path, "error", err)
-				// Continue with other files even if one fails to parse
-				return nil
-			}
-
-			for _, rule := range cfg.Rules {
-				rulePath := filepath.ToSlash(rule.Path)
-				currentDir := filepath.ToSlash(filepath.Dir(path))
-
-				// Convert paths to absolute if needed
-				if !filepath.IsAbs(rulePath) && !filepath.IsAbs(currentDir) {
-					absPath, err := filepath.Abs(path)
-					if err == nil {
-						absDir := filepath.ToSlash(filepath.Dir(absPath))
-
-						// If the current directory is not absolute (relative to working dir)
-						// and the rule path is also relative (to project root)
-						// then we need to check if the absolute path ends with the rule path
-						// or if it's a subdirectory of the rule path
-						if strings.HasSuffix(absDir, rulePath) || strings.Contains(absDir+"/", "/"+rulePath+"/") {
-							fileViolations := checkImports(path, imports, rule, cfg.Modfile, logger)
-							for _, v := range fileViolations {
-								violations.Add(v)
-							}
-							// Update cache
-							if cfg.Incremental {
-								if len(fileViolations) == 0 {
-									err = cache.AddFile(path)
-								} else {
-									err = cache.AddFileWithViolations(path, fileViolations)
-								}
-								if err != nil {
-									logger.Warn("Failed to update cache for file", "path", path, "error", err)
-								}
-							}
-							continue
-						}
-					}
-				}
-
-				// Check if the current directory matches the rule path exactly or is a subdirectory
-				if currentDir == rulePath || strings.HasPrefix(currentDir, rulePath+"/") {
-					fileViolations := checkImports(path, imports, rule, cfg.Modfile, logger)
-					for _, v := range fileViolations {
-						violations.Add(v)
-					}
-					// Update cache
-					if cfg.Incremental {
-						if len(fileViolations) == 0 {
-							err = cache.AddFile(path)
-						} else {
-							err = cache.AddFileWithViolations(path, fileViolations)
-						}
-						if err != nil {
-							logger.Warn("Failed to update cache for file", "path", path, "error", err)
-						}
-					}
-				}
-			}
-		}
-		return nil
-	})
+// Lint analyzes Go files in the given path for import rule violations
+func (g *Goverhaul) Lint(path string) error {
+	// Walk the file system and check each file
+	violations, err := g.walkAndLint(path)
 	if err != nil {
-		// Check if the error is a file access issue
-		if os.IsPermission(err) {
-			return NewFSError("permission denied while walking the path", err).
-				WithDetails("Path: " + path + ". Check if you have the necessary permissions.")
-		} else if os.IsNotExist(err) {
-			return NewFSError("path does not exist", err).
-				WithDetails("Path: " + path + ". Check if the path exists.")
-		} else {
-			return NewLintError("error walking the path", err).
-				WithDetails("Path: " + path)
-		}
+		return handleWalkError(err, path)
 	}
 
-	if !violations.IsEmpty() {
-		// Log a summary of violations
-		logger.Error("Found rule violations", "count", len(violations.Violations))
-		return violations
+	// Report results
+	err = g.reportResults(violations)
+	if err != nil {
+		return err
 	}
-
-	logger.Info("No rule violations found. All dependencies are compliant!")
 	return nil
 }
 
-func getModuleName(modfilePath string) (string, error) {
-	goModBytes, err := os.ReadFile(modfilePath)
+// ensureLogger creates a default logger if none is provided
+func ensureLogger(logger *slog.Logger) *slog.Logger {
+	if logger == nil {
+		return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		}))
+	}
+	return logger
+}
+
+// initializeCache sets up the cache for incremental analysis
+func (g *Goverhaul) initializeCache(cachePath string) (LintCache, error) {
+	g.logger.Info("Using incremental analysis", "cache_file", cachePath)
+
+	gCache, err := granular.New(cachePath, granular.WithFs(g.fs))
 	if err != nil {
-		return "", NewFSError("failed to read go.mod file", err).
-			WithFile(modfilePath).
-			WithDetails("Module name is required for import path resolution")
+		return LintCache{}, NewCacheError("failed to load cache", err)
+	}
+	return LintCache{gCache: gCache}, nil
+}
+
+// walkAndLint walks the file system and lints each Go file
+func (g *Goverhaul) walkAndLint(path string) (*LintViolations, error) {
+	violations := NewLintViolations()
+
+	// Use afero.Walk instead of filepath.Walk
+	err := afero.Walk(g.fs, path, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return WithDetails(WithFile(NewFSError("error accessing path", err), path),
+				"Check if the path exists and you have permission to access it")
+		}
+
+		if !isGoFileFs(info) {
+			return nil
+		}
+
+		// Check if we can skip this file based on cache
+		if g.cfg.Incremental {
+			cachedViolations := g.hasCachedViolations(path)
+			if len(cachedViolations) > 0 {
+				for _, v := range cachedViolations {
+					violations.Add(v)
+				}
+			}
+			return nil
+		}
+
+		err = g.lintFile(path, violations)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return violations, nil
+}
+
+// isGoFileFs checks if the file is a Go source file using afero.Fs.FileInfo
+func isGoFileFs(info os.FileInfo) bool {
+	return !info.IsDir() && strings.HasSuffix(info.Name(), ".go")
+}
+
+// hasCachedViolations checks if a file can be skipped based on cache
+func (g *Goverhaul) hasCachedViolations(path string) []LintViolation {
+	var cachedViolations LintViolations
+	cachedViolations, err := g.cache.HasEntry(path)
+	if err != nil {
+		if errors.Is(err, ErrEntryNotFound) || errors.Is(err, ErrReadingCachedViolations) {
+			// just log and continue the linting. LintCache checking should not halt the main operation.
+			g.logger.Warn("Error checking file change status", "path", path, "error", err)
+		}
+	}
+
+	return cachedViolations.Violations
+}
+
+// lintFile lints a single Go file
+func (g *Goverhaul) lintFile(path string, violations *LintViolations) error {
+	g.logger.Debug("Analyzing file", "path", path)
+	imports, err := g.getImports(path)
+	if err != nil {
+		g.logger.Error("Could not parse file", "path", path, "error", err)
+		// Continue with other files even if one fails to parse
+		return nil
+	}
+
+	for _, rule := range g.cfg.Rules {
+		if !ruleAppliesToPath(rule, path) {
+			continue
+		}
+
+		fileViolations := g.checkImports(path, imports, rule, g.cfg.Modfile)
+		for _, v := range fileViolations {
+			violations.Add(v)
+		}
+
+		// Update cache if incremental analysis is enabled
+		if g.cfg.Incremental {
+			g.updateCache(path, fileViolations)
+		}
+	}
+
+	return nil
+}
+
+// ruleAppliesToPath checks if a rule applies to a given file path
+func ruleAppliesToPath(rule Rule, path string) bool {
+	rulePath := NormalizePath(rule.Path)
+	currentDir := DirPath(path)
+
+	// Convert paths to absolute if needed
+	if !IsAbsPath(rulePath) && !IsAbsPath(currentDir) {
+		absPath := AbsPath(path)
+		absDir := DirPath(absPath)
+
+		// If the current directory is not absolute (relative to working dir)
+		// and the rule path is also relative (to project root)
+		// then we need to check if the absolute path ends with the rule path
+		// or if it's a subdirectory of the rule path
+		if strings.HasSuffix(absDir, rulePath) || IsSubPath(rulePath, absDir) {
+			return true
+		}
+	}
+
+	// Check if the current directory matches the rule path exactly or is a subdirectory
+	return currentDir == rulePath || IsSubPath(rulePath, currentDir)
+}
+
+// updateCache updates the cache with file violations
+func (g *Goverhaul) updateCache(path string, fileViolations []LintViolation) {
+	var err error
+	if len(fileViolations) == 0 {
+		err = g.cache.AddFile(path)
+	} else {
+		err = g.cache.AddFileWithViolations(path, fileViolations)
+	}
+	if err != nil {
+		g.logger.Warn("Failed to update cache for file", "path", path, "error", err)
+	}
+}
+
+// handleWalkError handles errors that occur during file system walking
+func handleWalkError(err error, path string) error {
+	if os.IsPermission(err) {
+		return WithDetails(NewFSError("permission denied while walking the path", err),
+			"Path: "+path+". Check if you have the necessary permissions.")
+	} else if os.IsNotExist(err) {
+		return WithDetails(NewFSError("path does not exist", err),
+			"Path: "+path+". Check if the path exists.")
+	} else {
+		return WithDetails(NewLintError("error walking the path", err),
+			"Path: "+path)
+	}
+}
+
+// reportResults reports the linting results
+func (g *Goverhaul) reportResults(violations *LintViolations) error {
+	if !violations.IsEmpty() {
+		// Log a summary of violations
+		g.logger.Error("Found rule violations", "count", len(violations.Violations))
+		return ErrLint
+	}
+
+	g.logger.Info("No rule violations found. All dependencies are compliant!")
+	return nil
+}
+
+func getModuleName(fs afero.Fs, modfilePath string) (string, error) {
+	// If modfilePath is empty, default to "go.mod" in the current directory
+	if modfilePath == "" {
+		modfilePath = "go.mod"
+	}
+
+	goModBytes, err := afero.ReadFile(fs, modfilePath)
+	if err != nil {
+		return "", WithDetails(WithFile(NewFSError("failed to read go.mod file", err), modfilePath),
+			"Module name is required for import path resolution")
 	}
 
 	modulePath := modfile.ModulePath(goModBytes)
 	if modulePath == "" {
-		return "", NewParseError("failed to extract module path from go.mod", nil).
-			WithFile(modfilePath).
-			WithDetails("The go.mod file may be malformed or empty")
+		// The file exists but doesn't contain a valid module declaration
+		return "", WithDetails(WithFile(NewParseError("failed to extract module path from go.mod", nil), modfilePath),
+			"The go.mod file exists but doesn't contain a valid module declaration")
 	}
 
 	return modulePath, nil
 }
 
-func getImports(path string) ([]string, error) {
+// getImportsWithFs gets imports from a Go file using afero.Fs
+func (g *Goverhaul) getImports(path string) ([]string, error) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+
+	// Read the file content using afero.Fs
+	content, err := afero.ReadFile(g.fs, path)
 	if err != nil {
-		return nil, NewParseError("failed to parse Go file", err).
-			WithFile(path).
-			WithDetails("Make sure the file is a valid Go source file")
+		return nil, WithDetails(WithFile(NewFSError("failed to read Go file", err), path),
+			"Make sure the file exists and is readable")
+	}
+
+	// Parse the file content
+	file, err := parser.ParseFile(fset, path, content, parser.ImportsOnly)
+	if err != nil {
+		return nil, WithDetails(WithFile(NewParseError("failed to parse Go file", err), path),
+			"Make sure the file is a valid Go source file")
 	}
 
 	var imports []string
@@ -197,81 +279,136 @@ func getImports(path string) ([]string, error) {
 	return imports, nil
 }
 
-// prepareAllowedSet creates a map of allowed imports for a rule
-func prepareAllowedSet(rule Rule, moduleName string) map[string]bool {
-	allowedSet := make(map[string]bool)
+// RuleMatcher encapsulates the logic for matching imports against rules
+type RuleMatcher struct {
+	rule          Rule
+	moduleName    string
+	allowedSet    map[string]bool
+	prohibitedMap map[string]string
+}
+
+// newRuleMatcherWithFs creates a new RolerMatcher using a custom Fs
+func newRuleMatcherWithFs(rule Rule, moduleNameOrPath string, fs afero.Fs) *RuleMatcher {
+	// Extract module name if moduleNameOrPath is a path to go.mod
+	moduleName := moduleNameOrPath
+	if strings.HasSuffix(moduleNameOrPath, ".mod") {
+		extractedName, err := getModuleName(fs, moduleNameOrPath)
+		if err == nil {
+			moduleName = extractedName
+		}
+	}
+
+	matcher := &RuleMatcher{
+		rule:          rule,
+		moduleName:    moduleName,
+		allowedSet:    make(map[string]bool),
+		prohibitedMap: make(map[string]string),
+	}
+
+	// Prepare allowed set
 	if len(rule.Allowed) > 0 {
 		for _, allowed := range rule.Allowed {
+			// Add the original path to the allowed set
+			matcher.allowedSet[allowed] = true
+
+			// Handle module-relative paths
 			if !strings.Contains(allowed, ".") {
-				allowedSet[allowed] = true
-				allowedSet[strings.Join([]string{moduleName, allowed}, "/")] = true
-			} else {
-				allowedSet[allowed] = true
+				// Simple case: direct module subpath
+				matcher.allowedSet[strings.Join([]string{moduleName, allowed}, "/")] = true
 			}
 		}
 	}
-	return allowedSet
-}
 
-// prepareProhibitedMap creates a map of prohibited imports for a rule
-func prepareProhibitedMap(rule Rule, moduleName string) map[string]string {
-	prohibitedMap := make(map[string]string) // Map from package name to cause
+	// Prepare prohibited map
 	for _, prohibited := range rule.Prohibited {
+		// Add the original path to the prohibited map
+		matcher.prohibitedMap[prohibited.Name] = prohibited.Cause
+
+		// Handle module-relative paths
 		if !strings.Contains(prohibited.Name, ".") {
-			prohibitedMap[strings.Join([]string{moduleName, prohibited.Name}, "/")] = prohibited.Cause
-		} else {
-			prohibitedMap[prohibited.Name] = prohibited.Cause
+			// Simple case: direct module subpath
+			matcher.prohibitedMap[strings.Join([]string{moduleName, prohibited.Name}, "/")] = prohibited.Cause
 		}
 	}
-	return prohibitedMap
+
+	return matcher
 }
 
-func checkImports(path string, imports []string, rule Rule, moduleName string, logger *slog.Logger) []LintViolation {
+// IsProhibited checks if an import is prohibited by the rule
+func (m *RuleMatcher) IsProhibited(imp string) (string, bool) {
+	cause, isProhibited := m.prohibitedMap[imp]
+	return cause, isProhibited
+}
+
+// IsAllowed checks if an import is allowed by the rule
+func (m *RuleMatcher) IsAllowed(imp string) bool {
+	// If there are no allowed imports specified, all imports are allowed
+	if len(m.rule.Allowed) == 0 {
+		return true
+	}
+	return m.allowedSet[imp]
+}
+
+// CheckImport checks a single import against the rule
+func (m *RuleMatcher) CheckImport(imp string, normalizedPath string, logger *slog.Logger) *LintViolation {
+	// First check if the import is prohibited
+	cause, isProhibited := m.IsProhibited(imp)
+	if isProhibited {
+		violation := &LintViolation{
+			File:   normalizedPath,
+			Import: imp,
+			Rule:   m.rule.Path,
+			Cause:  cause,
+		}
+
+		if cause != "" {
+			logger.Error("Import is prohibited",
+				"file", normalizedPath,
+				"import", imp,
+				"cause", cause)
+			violation.Details = "This import is explicitly prohibited with cause: " + cause
+		} else {
+			logger.Error("Import is prohibited",
+				"file", normalizedPath,
+				"import", imp)
+			violation.Details = "This import is explicitly prohibited"
+		}
+
+		return violation
+	}
+
+	// Then check if the import is allowed
+	if !m.IsAllowed(imp) {
+		logger.Error("Import is not allowed",
+			"file", normalizedPath,
+			"import", imp)
+
+		return &LintViolation{
+			File:    normalizedPath,
+			Import:  imp,
+			Rule:    m.rule.Path,
+			Details: "This import is not in the allowed list for this package",
+		}
+	}
+
+	return nil
+}
+
+// checkImports checks all imports in a file against a rule using the provided file system
+func (g *Goverhaul) checkImports(path string, imports []string, rule Rule, moduleName string) []LintViolation {
 	violations := make([]LintViolation, 0)
 
-	// Prepare maps for allowed and prohibited imports
-	allowedSet := prepareAllowedSet(rule, moduleName)
-	prohibitedMap := prepareProhibitedMap(rule, moduleName)
+	// Create a rule matcher with the provided file system
+	matcher := newRuleMatcherWithFs(rule, moduleName, g.fs)
 
+	// Normalize the path for consistent reporting
+	normalizedPath := NormalizePath(path)
+
+	// Check each import
 	for _, imp := range imports {
-		cause, isProhibited := prohibitedMap[imp]
-		if isProhibited {
-			violation := LintViolation{
-				File:   filepath.ToSlash(path),
-				Import: imp,
-				Rule:   rule.Path,
-				Cause:  cause,
-			}
-
-			if cause != "" {
-				logger.Error("Import is prohibited",
-					"file", filepath.ToSlash(path),
-					"import", imp,
-					"cause", cause)
-				violation.Details = "This import is explicitly prohibited with cause: " + cause
-			} else {
-				logger.Error("Import is prohibited",
-					"file", filepath.ToSlash(path),
-					"import", imp)
-				violation.Details = "This import is explicitly prohibited"
-			}
-
-			violations = append(violations, violation)
-			continue // Skip allowed check if already prohibited
-		}
-
-		if len(rule.Allowed) > 0 && !allowedSet[imp] {
-			logger.Error("Import is not allowed",
-				"file", filepath.ToSlash(path),
-				"import", imp)
-
-			violation := LintViolation{
-				File:    filepath.ToSlash(path),
-				Import:  imp,
-				Rule:    rule.Path,
-				Details: "This import is not in the allowed list for this package",
-			}
-			violations = append(violations, violation)
+		violation := matcher.CheckImport(imp, normalizedPath, g.logger)
+		if violation != nil {
+			violations = append(violations, *violation)
 		}
 	}
 

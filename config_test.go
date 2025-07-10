@@ -1,4 +1,4 @@
-package main
+package goverhaul
 
 import (
 	"testing"
@@ -32,7 +32,7 @@ func TestLoadConfig(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				return afero.WriteFile(fs, "/home/test/config.yml", defaultConfigTestFile(t), 0o644)
+				return afero.WriteFile(fs, "/home/test/.goverhaul/config.yml", defaultConfigTestFile(t), 0o644)
 			},
 		},
 	}
@@ -48,7 +48,15 @@ func TestLoadConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			config, err := LoadConfig(memFs, cfgFile)
+			// Use the config file path from the test setup
+			configPath := "config.yml"
+			if name == "should load config from .goverhaul folder in the current directory" {
+				configPath = ".goverhaul/config.yml"
+			} else if name == "should load config from /home/test/.goverhaul directory" {
+				configPath = "/home/test/.goverhaul/config.yml"
+			}
+
+			config, err := LoadConfig(memFs, configPath)
 			if err != nil {
 				t.Fatalf("failed to load config: %v", err)
 			}
@@ -62,9 +70,10 @@ func TestEmptyConfig(t *testing.T) {
 	memFs := afero.NewMemMapFs()
 
 	var emptyContent []byte
-	afero.WriteFile(memFs, "config.yml", emptyContent, 0o644)
+	cfgFileName := "config.yml"
+	afero.WriteFile(memFs, cfgFileName, emptyContent, 0o644)
 
-	config, err := LoadConfig(memFs, cfgFile)
+	config, err := LoadConfig(memFs, cfgFileName)
 	if err != nil {
 		t.Fatalf("failed to load config: %v", err)
 	}
@@ -87,7 +96,8 @@ func TestInvalidYamlConfig(t *testing.T) {
 
 	afero.WriteFile(memFs, "config.yml", []byte(invalidYAML), 0o644)
 
-	_, err := LoadConfig(memFs, cfgFile)
+	cfgFileName := "config.yml"
+	_, err := LoadConfig(memFs, cfgFileName)
 	require.Error(t, err)
 	require.Equal(t, "[config] failed loading config file: While parsing config: yaml: line 2: found character that cannot start any token", err.Error())
 }

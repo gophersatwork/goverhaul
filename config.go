@@ -1,4 +1,4 @@
-package main
+package goverhaul
 
 import (
 	"errors"
@@ -30,7 +30,13 @@ func LoadConfig(fs afero.Fs, cfgFile string) (Config, error) {
 	viper.AddConfigPath(".")
 	viper.AddConfigPath("$HOME/.goverhaul")
 	viper.AddConfigPath("./.goverhaul")
-	viper.SetConfigFile("config.yml")
+
+	// Use the provided config file or default to config.yml
+	if cfgFile != "" {
+		viper.SetConfigFile(cfgFile)
+	} else {
+		viper.SetConfigFile("config.yml")
+	}
 
 	if err := viper.ReadInConfig(); err != nil {
 		var configFileNotFoundError viper.ConfigFileNotFoundError

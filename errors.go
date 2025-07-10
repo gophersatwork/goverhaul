@@ -1,6 +1,7 @@
-package main
+package goverhaul
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -20,13 +21,13 @@ const (
 	ErrorTypeCache ErrorType = "cache"
 )
 
-// AppError is a custom error type that provides context about the error
+// AppError represents an application error with additional context
 type AppError struct {
-	Type    ErrorType // The category of the error
-	Message string    // A human-readable error message
-	Err     error     // The underlying error, if any
-	File    string    // The file related to the error, if applicable
-	Details string    // Additional details about the error
+	Type    ErrorType // Type of error
+	Message string    // Human-readable error message
+	File    string    // Optional: file path related to the error
+	Details string    // Optional: additional details about the error
+	Err     error     // Optional: wrapped error
 }
 
 // Error implements the error interface
@@ -37,66 +38,136 @@ func (e *AppError) Error() string {
 	return fmt.Sprintf("[%s] %s", e.Type, e.Message)
 }
 
-// Unwrap returns the underlying error
+// Unwrap implements the Go 1.13+ error unwrapping interface
 func (e *AppError) Unwrap() error {
 	return e.Err
 }
 
-// WithFile adds file information to the error
-func (e *AppError) WithFile(file string) *AppError {
-	e.File = file
-	return e
+// GetErrorInfo extracts error information from an error chain
+func GetErrorInfo(err error) (ErrorInfo, bool) {
+	var appErr *AppError
+	if errors.As(err, &appErr) {
+		return ErrorInfo{
+			Type:    appErr.Type,
+			File:    appErr.File,
+			Details: appErr.Details,
+		}, true
+	}
+
+	// For backward compatibility
+	var info ErrorInfo
+	if errors.As(err, &info) {
+		return info, info.Type != ""
+	}
+
+	return ErrorInfo{}, false
 }
 
-// WithDetails adds additional details to the error
-func (e *AppError) WithDetails(details string) *AppError {
-	e.Details = details
-	return e
+// ErrorInfo contains additional information about an error (legacy)
+// Kept for backward compatibility
+type ErrorInfo struct {
+	Type    ErrorType
+	File    string
+	Details string
+}
+
+// Error implements the error interface for ErrorInfo
+func (e ErrorInfo) Error() string {
+	return fmt.Sprintf("[%s]", e.Type)
+}
+
+// WithFile adds file information to an error
+func WithFile(err error, file string) error {
+	var appErr *AppError
+	if errors.As(err, &appErr) {
+		// Create a new AppError with the file information
+		return &AppError{
+			Type:    appErr.Type,
+			Message: appErr.Message,
+			File:    file,
+			Details: appErr.Details,
+			Err:     appErr.Err,
+		}
+	}
+
+	// For backward compatibility
+	var info ErrorInfo
+	if errors.As(err, &info) {
+		info.File = file
+		return fmt.Errorf("%w", info)
+	}
+
+	// If it's not an AppError or ErrorInfo, wrap it in a new AppError
+	return &AppError{
+		Type:    ErrorTypeFS, // Default type
+		Message: err.Error(),
+		File:    file,
+		Err:     err,
+	}
+}
+
+// WithDetails adds additional details to an error
+func WithDetails(err error, details string) error {
+	var appErr *AppError
+	if errors.As(err, &appErr) {
+		// Create a new AppError with the details information
+		return &AppError{
+			Type:    appErr.Type,
+			Message: appErr.Message,
+			File:    appErr.File,
+			Details: details,
+			Err:     appErr.Err,
+		}
+	}
+
+	// For backward compatibility
+	var info ErrorInfo
+	if errors.As(err, &info) {
+		info.Details = details
+		return fmt.Errorf("%w", info)
+	}
+
+	// If it's not an AppError or ErrorInfo, wrap it in a new AppError
+	return &AppError{
+		Type:    ErrorTypeFS, // Default type
+		Message: err.Error(),
+		Details: details,
+		Err:     err,
+	}
+}
+
+// NewError creates a new application error with the specified type
+func NewError(errType ErrorType, message string, err error) error {
+	return &AppError{
+		Type:    errType,
+		Message: message,
+		Err:     err,
+	}
 }
 
 // NewConfigError creates a new configuration error
-func NewConfigError(message string, err error) *AppError {
-	return &AppError{
-		Type:    ErrorTypeConfig,
-		Message: message,
-		Err:     err,
-	}
+func NewConfigError(message string, err error) error {
+	return NewError(ErrorTypeConfig, message, err)
 }
 
 // NewFSError creates a new file system error
-func NewFSError(message string, err error) *AppError {
-	return &AppError{
-		Type:    ErrorTypeFS,
-		Message: message,
-		Err:     err,
-	}
+func NewFSError(message string, err error) error {
+	return NewError(ErrorTypeFS, message, err)
 }
 
 // NewParseError creates a new parsing error
-func NewParseError(message string, err error) *AppError {
-	return &AppError{
-		Type:    ErrorTypeParse,
-		Message: message,
-		Err:     err,
-	}
+func NewParseError(message string, err error) error {
+	return NewError(ErrorTypeParse, message, err)
 }
 
 // NewLintError creates a new linting error
-func NewLintError(message string, err error) *AppError {
-	return &AppError{
-		Type:    ErrorTypeLint,
-		Message: message,
-		Err:     err,
-	}
+func NewLintError(message string, err error) error {
+	return NewError(ErrorTypeLint, message, err)
 }
 
 // NewCacheError creates a new cache error
-func NewCacheError(message string, err error) *AppError {
-	return &AppError{
-		Type:    ErrorTypeCache,
-		Message: message,
-		Err:     err,
-	}
+func NewCacheError(message string, err error) error {
+	return NewError(ErrorTypeCache, message, err)
 }
 
 // LintViolation represents a specific rule violation found during linting

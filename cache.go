@@ -1,29 +1,46 @@
-package main
+package goverhaul
 
 import (
 	"encoding/json"
 	"errors"
 
 	"github.com/gophersatwork/granular"
+	"github.com/spf13/afero"
 )
 
 type LintCache struct {
 	gCache *granular.Cache
+	fs     afero.Fs
 }
 
-func NewCache(path string) (*granular.Cache, error) {
+func NewCache(path string) (*LintCache, error) {
 	cache, err := granular.New(path)
 	if err != nil {
-		return cache, err
+		return nil, err
 	}
+	return &LintCache{
+		gCache: cache,
+	}, nil
+}
 
-	return cache, nil
+func NewCacheWithFs(path string, fs afero.Fs) (*LintCache, error) {
+	cache, err := granular.New(path, granular.WithFs(fs))
+	if err != nil {
+		return nil, err
+	}
+	return &LintCache{
+		gCache: cache,
+		fs:     fs,
+	}, nil
 }
 
 func (c *LintCache) AddFile(path string) error {
+	// Normalize the path for consistent caching
+	normalizedPath := NormalizePath(path)
 	key := granular.Key{
 		Inputs: []granular.Input{granular.FileInput{
-			Path: path,
+			Path: normalizedPath,
+			Fs:   c.fs,
 		}},
 	}
 	err := c.gCache.Store(key, granular.Result{})
@@ -35,14 +52,22 @@ func (c *LintCache) AddFile(path string) error {
 }
 
 func (c *LintCache) AddFileWithViolations(path string, lv []LintViolation) error {
+	// Normalize the path for consistent caching
+	normalizedPath := NormalizePath(path)
+
 	key := granular.Key{
 		Inputs: []granular.Input{granular.FileInput{
-			Path: path,
+			Path: normalizedPath,
+			Fs:   c.fs,
 		}},
 	}
 
 	metadata := make(map[string]string)
-	lvBytes, err := json.Marshal(lv)
+	// Create a LintViolations struct to hold the violations
+	violations := LintViolations{
+		Violations: lv,
+	}
+	lvBytes, err := json.Marshal(violations)
 	if err != nil {
 		return err
 	}
@@ -63,10 +88,14 @@ func (c *LintCache) AddFileWithViolations(path string, lv []LintViolation) error
 var ErrEntryNotFound = errors.New("entry not found")
 var ErrReadingCachedViolations = errors.New("cached violations are invalid")
 
-func (c *LintCache) hasEntry(filePath string) (LintViolations, error) {
+func (c *LintCache) HasEntry(filePath string) (LintViolations, error) {
+	// Normalize the path for consistent caching
+	normalizedPath := NormalizePath(filePath)
+
 	key := granular.Key{
 		Inputs: []granular.Input{granular.FileInput{
-			Path: filePath,
+			Path: normalizedPath,
+			Fs:   c.fs,
 		}},
 	}
 
@@ -87,5 +116,4 @@ func (c *LintCache) hasEntry(filePath string) (LintViolations, error) {
 		return LintViolations{}, ErrReadingCachedViolations
 	}
 	return lv, nil
-
 }

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -13,15 +13,17 @@ import (
 )
 
 var (
-	cfgFile string
-	path    string
-	verbose bool
+	cfgFile     string
+	path        string
+	verbose     bool
+	groupByRule bool
 )
 
 func main() {
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.goverhaul/config.yml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file")
 	rootCmd.PersistentFlags().StringVar(&path, "path", ".", "path to lint")
 	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "enable verbose logging")
+	rootCmd.PersistentFlags().BoolVar(&groupByRule, "group-by-rule", false, "group violations by rule instead of by file")
 
 	// Execute the command and handle errors
 	if err := fang.Execute(context.Background(), rootCmd); err != nil {
@@ -54,20 +56,8 @@ func main() {
 			if appErr.File != "" {
 				logger.Error("File information", "file", appErr.File)
 			}
-		} else {
-			var violations *goverhaul.LintViolations
-			if errors.As(err, &violations) {
-				logger.Error("Architecture rules violated",
-					"message", "The codebase contains imports that violate the defined architectural rules",
-					"details", violations.Error())
-			} else if errors.Is(err, goverhaul.ErrLint) {
-				logger.Error("Architecture rules violated",
-					"message", "The codebase contains imports that violate the defined architectural rules")
-			} else {
-				logger.Error("Command failed", "error", err)
-			}
 		}
-
+		logger.Error("Command failed", "error", err)
 		os.Exit(1)
 	}
 }
@@ -100,8 +90,7 @@ var rootCmd = &cobra.Command{
 		}))
 
 		fs := afero.NewOsFs() // real fs binding
-
-		cfg, err := goverhaul.LoadConfig(fs, cfgFile)
+		cfg, err := goverhaul.LoadConfig(fs, path, cfgFile)
 		if err != nil {
 			logger.Error("Failed to load configuration", "error", err)
 			return err
@@ -113,35 +102,15 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 
-		if err := linter.Lint(path); err != nil {
-			// Handle different types of linting errors
-			var violations *goverhaul.LintViolations
-			if errors.As(err, &violations) {
-				// For lint violations, display the detailed error message with file information
-				logger.Error("Linting failed: architectural rules violated",
-					"path", path,
-					"details", violations.Error())
-				return err
-			}
-
-			appErr, found := goverhaul.GetErrorInfo(err)
-			if found {
-				// For application errors, provide more context
-				logger.Error("Linting failed",
-					"error", err.Error(),
-					"error_type", appErr.Type)
-
-				if appErr.File != "" {
-					logger.Info("File information", "file", appErr.File)
-				}
-
-				if appErr.Details != "" {
-					logger.Info("Additional information", "details", appErr.Details)
-				}
-			} else {
-				logger.Error("Linting failed with unexpected error", "error", err)
-			}
+		lv, err := linter.Lint(path)
+		if err != nil {
 			return err
+		}
+
+		if !groupByRule {
+			fmt.Println(lv.PrintByRule())
+		} else {
+			fmt.Println(lv.PrintByFile())
 		}
 
 		return nil

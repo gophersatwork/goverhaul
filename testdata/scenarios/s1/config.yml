@@ -5,7 +5,8 @@ rules:
     prohibited:
       - name: "internal/infrastructure"
         cause: "Domain should not depend on infrastructure"
-
+      - name: "internal/plugins"
+        cause: "Domain should not interact with plugins"
   # API layer should not access database directly
   - path: "internal/api"
     prohibited:

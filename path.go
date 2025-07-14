@@ -8,6 +8,7 @@ import (
 // NormalizePath converts a path to use forward slashes consistently
 // regardless of the operating system and cleans the path.
 // It removes redundant separators, dot-segments, and normalizes separators to forward slashes.
+// This ensures consistent path handling across different operating systems.
 // Empty paths remain empty to maintain backward compatibility.
 func NormalizePath(path string) string {
 	// Special case: empty path should remain empty
@@ -24,12 +25,14 @@ func NormalizePath(path string) string {
 // JoinPaths joins path elements and normalizes the result.
 // It joins elements using the system's path separator, then normalizes to forward slashes,
 // and cleans the path to remove redundant separators and dot-segments.
+// This function works on all operating systems by normalizing paths to use forward slashes.
 func JoinPaths(elem ...string) string {
 	return NormalizePath(filepath.Join(elem...))
 }
 
 // IsSubPath checks if childPath is a subdirectory of parentPath.
 // Both paths are normalized before comparison.
+// This function works on all operating systems by normalizing paths to use forward slashes.
 func IsSubPath(parentPath, childPath string) bool {
 	normalizedParent := NormalizePath(parentPath)
 	normalizedChild := NormalizePath(childPath)
@@ -53,12 +56,14 @@ func IsSubPath(parentPath, childPath string) bool {
 }
 
 // IsAbsPath checks if a path is absolute
+// This function works on all operating systems by using the system's path separator
 func IsAbsPath(path string) bool {
 	return filepath.IsAbs(path)
 }
 
 // AbsPath returns the absolute path for a given path
 // If an error occurs, it returns the original path
+// This function works on all operating systems by normalizing paths to use forward slashes
 func AbsPath(path string) string {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -68,7 +73,7 @@ func AbsPath(path string) string {
 }
 
 // DirPath returns the directory portion of a path
-// This function is optimized for Unix paths only
+// This function works on all operating systems by normalizing paths to use forward slashes
 func DirPath(path string) string {
 	// Normalize the path first to ensure consistent handling
 	normalizedPath := NormalizePath(path)

@@ -49,19 +49,14 @@ func NewLinter(cfg Config, logger *slog.Logger, fs afero.Fs) (*Goverhaul, error)
 }
 
 // Lint analyzes Go files in the given path for import rule violations
-func (g *Goverhaul) Lint(path string) error {
+func (g *Goverhaul) Lint(path string) (*LintViolations, error) {
 	// Walk the file system and check each file
 	violations, err := g.walkAndLint(path)
 	if err != nil {
-		return handleWalkError(err, path)
+		return nil, handleWalkError(err, path)
 	}
 
-	// Report results
-	err = g.reportResults(violations)
-	if err != nil {
-		return err
-	}
-	return nil
+	return violations, nil
 }
 
 // ensureLogger creates a default logger if none is provided
@@ -110,7 +105,6 @@ func (g *Goverhaul) walkAndLint(path string) (*LintViolations, error) {
 			}
 			return nil
 		}
-
 		err = g.lintFile(path, violations)
 		return err
 	})
@@ -140,28 +134,28 @@ func (g *Goverhaul) hasCachedViolations(path string) []LintViolation {
 }
 
 // lintFile lints a single Go file
-func (g *Goverhaul) lintFile(path string, violations *LintViolations) error {
-	g.logger.Debug("Analyzing file", "path", path)
-	imports, err := g.getImports(path)
+func (g *Goverhaul) lintFile(goFilePath string, violations *LintViolations) error {
+	g.logger.Debug("Analyzing file", "path", goFilePath)
+	imports, err := g.getImports(goFilePath)
 	if err != nil {
-		g.logger.Error("Could not parse file", "path", path, "error", err)
+		g.logger.Error("Could not parse file", "path", goFilePath, "error", err)
 		// Continue with other files even if one fails to parse
 		return nil
 	}
 
 	for _, rule := range g.cfg.Rules {
-		if !ruleAppliesToPath(rule, path) {
+		if !ruleAppliesToPath(rule, goFilePath) {
 			continue
 		}
 
-		fileViolations := g.checkImports(path, imports, rule, g.cfg.Modfile)
+		fileViolations := g.checkImports(goFilePath, imports, rule, g.cfg.Modfile)
 		for _, v := range fileViolations {
 			violations.Add(v)
 		}
 
 		// Update cache if incremental analysis is enabled
 		if g.cfg.Incremental {
-			g.updateCache(path, fileViolations)
+			g.updateCache(goFilePath, fileViolations)
 		}
 	}
 
@@ -169,13 +163,13 @@ func (g *Goverhaul) lintFile(path string, violations *LintViolations) error {
 }
 
 // ruleAppliesToPath checks if a rule applies to a given file path
-func ruleAppliesToPath(rule Rule, path string) bool {
+func ruleAppliesToPath(rule Rule, filePath string) bool {
 	rulePath := NormalizePath(rule.Path)
-	currentDir := DirPath(path)
+	currentDir := DirPath(filePath)
 
 	// Convert paths to absolute if needed
 	if !IsAbsPath(rulePath) && !IsAbsPath(currentDir) {
-		absPath := AbsPath(path)
+		absPath := AbsPath(filePath)
 		absDir := DirPath(absPath)
 
 		// If the current directory is not absolute (relative to working dir)
@@ -216,18 +210,6 @@ func handleWalkError(err error, path string) error {
 		return WithDetails(NewLintError("error walking the path", err),
 			"Path: "+path)
 	}
-}
-
-// reportResults reports the linting results
-func (g *Goverhaul) reportResults(violations *LintViolations) error {
-	if !violations.IsEmpty() {
-		// Log a summary of violations
-		g.logger.Error("Found rule violations", "count", len(violations.Violations))
-		return ErrLint
-	}
-
-	g.logger.Info("No rule violations found. All dependencies are compliant!")
-	return nil
 }
 
 func getModuleName(fs afero.Fs, modfilePath string) (string, error) {
@@ -335,8 +317,12 @@ func newRuleMatcherWithFs(rule Rule, moduleNameOrPath string, fs afero.Fs) *Rule
 
 // IsProhibited checks if an import is prohibited by the rule
 func (m *RuleMatcher) IsProhibited(imp string) (string, bool) {
-	cause, isProhibited := m.prohibitedMap[imp]
-	return cause, isProhibited
+	for prohibitedImp, cause := range m.prohibitedMap {
+		if strings.Contains(imp, prohibitedImp) {
+			return cause, true
+		}
+	}
+	return "", false
 }
 
 // IsAllowed checks if an import is allowed by the rule

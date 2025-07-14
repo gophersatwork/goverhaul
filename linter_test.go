@@ -141,8 +141,9 @@ func main() {
 			linter, err := NewLinter(test.config, nil, memFs)
 			require.NoError(t, err, "Failed to create linter")
 
-			err = linter.Lint(test.path)
+			violations, err := linter.Lint(test.path)
 			assert.NoError(t, err)
+			assert.NotNil(t, violations)
 		})
 	}
 }
@@ -219,9 +220,15 @@ func Connect() {
 			linter, err := NewLinter(test.config, nil, memFs)
 			require.NoError(t, err, "Failed to create linter")
 
-			err = linter.Lint(test.path)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), test.errorContains)
+			violations, err := linter.Lint(test.path)
+			if name == "should detect violations" {
+				assert.NoError(t, err)
+				assert.NotNil(t, violations)
+				assert.Greater(t, len(violations.Violations), 0)
+			} else {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), test.errorContains)
+			}
 		})
 	}
 }
@@ -549,13 +556,6 @@ func main() {
 	}
 }
 
-func TestLintFileFailure(t *testing.T) {
-	// Note: The original TestLintFile didn't have any failure cases
-	// where lintFile returns an error. This is a placeholder for future
-	// failure tests if they are added.
-	t.Skip("No failure cases for lintFile function")
-}
-
 func TestGetImportsSuccess(t *testing.T) {
 	tests := map[string]struct {
 		setupFs         func(fs afero.Fs) error
@@ -579,6 +579,25 @@ func main() {
 			},
 			filePath:        "main.go",
 			expectedImports: []string{"fmt", "errors", "os"},
+		},
+		"should get composed imports from valid Go file": {
+			setupFs: func(fs afero.Fs) error {
+				return afero.WriteFile(fs, "main.go", []byte(`package main
+
+import (
+	"fmt"
+	"errors"
+	"net/http"
+	"github.com/example/http2"
+)
+
+func main() {
+	fmt.Println("Hello, world!")
+}
+`), 0o644)
+			},
+			filePath:        "main.go",
+			expectedImports: []string{"fmt", "errors", "net/http", "github.com/example/http2"},
 		},
 		"should handle file with no imports": {
 			setupFs: func(fs afero.Fs) error {
@@ -706,7 +725,6 @@ func TestRuleAppliesToPath(t *testing.T) {
 func TestRuleMatcher(t *testing.T) {
 	tests := map[string]struct {
 		rule           Rule
-		moduleName     string
 		imports        []string
 		expectedResult map[string]bool // import -> isViolation
 	}{
@@ -720,8 +738,7 @@ func TestRuleMatcher(t *testing.T) {
 					},
 				},
 			},
-			moduleName: "example.com",
-			imports:    []string{"fmt", "unsafe", "os"},
+			imports: []string{"fmt", "unsafe", "os"},
 			expectedResult: map[string]bool{
 				"fmt":    false,
 				"unsafe": true,
@@ -733,8 +750,7 @@ func TestRuleMatcher(t *testing.T) {
 				Path:    "pkg",
 				Allowed: []string{"fmt", "errors"},
 			},
-			moduleName: "example.com",
-			imports:    []string{"fmt", "errors", "os"},
+			imports: []string{"fmt", "errors", "os"},
 			expectedResult: map[string]bool{
 				"fmt":    false,
 				"errors": false,
@@ -751,8 +767,7 @@ func TestRuleMatcher(t *testing.T) {
 					},
 				},
 			},
-			moduleName: "example.com",
-			imports:    []string{"fmt", "example.com/internal/private", "os"},
+			imports: []string{"fmt", "example.com/internal/private", "os"},
 			expectedResult: map[string]bool{
 				"fmt":                          false,
 				"example.com/internal/private": true,
@@ -764,7 +779,7 @@ func TestRuleMatcher(t *testing.T) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			memFs := afero.NewMemMapFs()
-			matcher := newRuleMatcherWithFs(test.rule, test.moduleName, memFs)
+			matcher := newRuleMatcherWithFs(test.rule, "example.com/s1/lib", memFs)
 
 			for _, imp := range test.imports {
 				violation := matcher.CheckImport(imp, "test.go", slog.Default())

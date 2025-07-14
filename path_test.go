@@ -310,7 +310,41 @@ func TestIsAbsPath(t *testing.T) {
 // to ensure our helpers work correctly on the current platform
 func TestPlatformSpecificBehavior(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Skipping Windows-specific tests as we only support Unix paths now")
+		// Test Windows-specific behavior
+		t.Run("Windows path normalization", func(t *testing.T) {
+			path := "C:\\Users\\user\\Documents"
+			normalized := NormalizePath(path)
+			expected := "C:/Users/user/Documents"
+			if normalized != expected {
+				t.Errorf("NormalizePath(%q) = %q, want %q", path, normalized, expected)
+			}
+		})
+
+		t.Run("Windows DirPath", func(t *testing.T) {
+			path := "C:\\Users\\user\\Documents\\file.txt"
+			dir := DirPath(path)
+			expected := "C:/Users/user/Documents"
+			if dir != expected {
+				t.Errorf("DirPath(%q) = %q, want %q", path, dir, expected)
+			}
+		})
+
+		t.Run("Windows JoinPaths", func(t *testing.T) {
+			elements := []string{"C:\\Users", "user", "Documents"}
+			joined := JoinPaths(elements...)
+			expected := "C:/Users/user/Documents"
+			if joined != expected {
+				t.Errorf("JoinPaths(%v) = %q, want %q", elements, joined, expected)
+			}
+		})
+
+		t.Run("Windows IsSubPath", func(t *testing.T) {
+			parent := "C:\\Users\\user"
+			child := "C:\\Users\\user\\Documents"
+			if !IsSubPath(parent, child) {
+				t.Errorf("IsSubPath(%q, %q) = false, want true", parent, child)
+			}
+		})
 	} else {
 		// Test Unix-specific behavior
 		t.Run("Unix path normalization", func(t *testing.T) {
@@ -318,6 +352,32 @@ func TestPlatformSpecificBehavior(t *testing.T) {
 			normalized := NormalizePath(path)
 			if normalized != path {
 				t.Errorf("NormalizePath(%q) = %q, want %q", path, normalized, path)
+			}
+		})
+
+		t.Run("Unix DirPath", func(t *testing.T) {
+			path := "/home/user/documents/file.txt"
+			dir := DirPath(path)
+			expected := "/home/user/documents"
+			if dir != expected {
+				t.Errorf("DirPath(%q) = %q, want %q", path, dir, expected)
+			}
+		})
+
+		t.Run("Unix JoinPaths", func(t *testing.T) {
+			elements := []string{"/home", "user", "documents"}
+			joined := JoinPaths(elements...)
+			expected := "/home/user/documents"
+			if joined != expected {
+				t.Errorf("JoinPaths(%v) = %q, want %q", elements, joined, expected)
+			}
+		})
+
+		t.Run("Unix IsSubPath", func(t *testing.T) {
+			parent := "/home/user"
+			child := "/home/user/documents"
+			if !IsSubPath(parent, child) {
+				t.Errorf("IsSubPath(%q, %q) = false, want true", parent, child)
 			}
 		})
 	}

@@ -2,9 +2,6 @@ package goverhaul
 
 import (
 	"errors"
-	"fmt"
-	"log"
-	"os"
 	"strings"
 
 	"github.com/spf13/afero"
@@ -78,33 +75,4 @@ func LoadConfig(fs afero.Fs, path string, cfgFile string) (Config, error) {
 	}
 
 	return config, nil
-}
-
-func printDirTree(fs afero.Fs, path string) error {
-	err := afero.Walk(fs, path, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if p == path {
-			return nil
-		}
-
-		depth := strings.Count(p, string(os.PathSeparator))
-		indent := strings.Repeat("│   ", depth-1)
-
-		name := info.Name()
-		if info.IsDir() {
-			fmt.Printf("%s├── 📁 %s\n", indent, name)
-		} else {
-			fmt.Printf("%s├── 📄 %s\n", indent, name)
-		}
-
-		return nil
-	})
-	if err != nil {
-		log.Fatalf("Failed to inspect the folder: %v", err)
-	}
-
-	return nil
 }

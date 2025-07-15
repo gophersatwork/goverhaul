@@ -43,12 +43,9 @@ func main() {
 			}))
 		}
 
-		// Check for specific error types
+		// Check for specific error details
 		appErr, found := goverhaul.GetErrorInfo(err)
 		if found {
-			logger.Error("Command failed",
-				"error_type", appErr.Type)
-
 			if appErr.Details != "" {
 				logger.Error("Additional details", "details", appErr.Details)
 			}
@@ -73,21 +70,30 @@ var rootCmd = &cobra.Command{
 			logLevel = slog.LevelDebug
 		}
 
-		// Set up log file
-		logFile, err := setupLogFile()
-		if err != nil {
-			// Fall back to stdout if we can't create the log file
-			logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		// Set up logger
+		var logger *slog.Logger
+		if verbose {
+			// When verbose is true, log to stdout for better visibility
+			logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 				Level: logLevel,
 			}))
-			logger.Error("Failed to set up log file, falling back to stdout", "error", err)
-			return err
-		}
-		defer logFile.Close()
+		} else {
+			// Otherwise, log to file
+			logFile, err := setupLogFile()
+			if err != nil {
+				// Fall back to stdout if we can't create the log file
+				logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+					Level: logLevel,
+				}))
+				logger.Error("Failed to set up log file, falling back to stdout", "error", err)
+				return err
+			}
+			defer logFile.Close()
 
-		logger := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{
-			Level: logLevel,
-		}))
+			logger = slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{
+				Level: logLevel,
+			}))
+		}
 
 		fs := afero.NewOsFs() // real fs binding
 		cfg, err := goverhaul.LoadConfig(fs, path, cfgFile)
@@ -107,7 +113,7 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 
-		if !groupByRule {
+		if groupByRule {
 			fmt.Println(lv.PrintByRule())
 		} else {
 			fmt.Println(lv.PrintByFile())

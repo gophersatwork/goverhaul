@@ -98,7 +98,7 @@ func TestInvalidYamlConfig(t *testing.T) {
 	afero.WriteFile(memFs, "config", []byte(invalidYAML), 0o644)
 	_, err := LoadConfig(memFs, ".", "config")
 	require.Error(t, err)
-	require.Equal(t, "[config] failed loading config file: While parsing config: yaml: line 2: found character that cannot start any token", err.Error())
+	require.Equal(t, "failed loading config file: While parsing config: yaml: line 2: found character that cannot start any token", err.Error())
 }
 
 func defaultConfigTestFile(t *testing.T) []byte {

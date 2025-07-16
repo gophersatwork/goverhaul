@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/alexrios/goverhaul"
 	"github.com/charmbracelet/fang"
+	"github.com/gophersatwork/goverhaul"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 )

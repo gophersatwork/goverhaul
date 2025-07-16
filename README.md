@@ -1,5 +1,11 @@
 # Goverhaul
 
+[![Build Status](https://github.com/gophersatwork/goverhaul/workflows/Run%20Tests/badge.svg)](https://github.com/gophersatwork/goverhaul/actions?query=workflow%3A%22Run+Tests%22)
+[![Code Coverage](https://codecov.io/gh/gophersatwork/goverhaul/branch/main/graph/badge.svg)](https://codecov.io/gh/gophersatwork/goverhaul)
+[![Go Report Card](https://goreportcard.com/badge/github.com/gophersatwork/goverhaul)](https://goreportcard.com/report/github.com/gophersatwork/goverhaul)
+[![GoDoc](https://godoc.org/github.com/gophersatwork/goverhaul?status.svg)](https://godoc.org/github.com/gophersatwork/goverhaul)
+[![GitHub release](https://img.shields.io/github/release/gophersatwork/goverhaul.svg)](https://github.com/gophersatwork/goverhaul/releases)
+
 Goverhaul is a CLI tool to enforce architectural rules in Go projects. It helps teams maintain the intended architecture by defining and enforcing import boundaries between packages.
 
 ## Features
@@ -15,13 +21,13 @@ Goverhaul is a CLI tool to enforce architectural rules in Go projects. It helps 
 ### Using Go Install
 
 ```bash
-go install github.com/alexrios/goverhaul@latest
+go install github.com/gophersatwork/goverhaul@latest
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/alexrios/goverhaul.git && cd goverhaul && go build
+git clone https://github.com/gophersatwork/goverhaul.git && cd goverhaul && go build
 ```
 
 ## Usage
@@ -36,7 +42,7 @@ goverhaul --path . --config .goverhaul.yml
 
 1. Install Goverhaul:
    ```bash
-   go install github.com/alexrios/goverhaul@latest
+   go install github.com/gophersatwork/goverhaul@latest
    ```
 
 2. Create a `.goverhaul.yml` file in your project root:
@@ -84,11 +90,66 @@ goverhaul --path . --config .goverhaul.yml
            go-version: '1.24'
 
        - name: Install Goverhaul
-         run: go install github.com/alexrios/goverhaul@latest
+         run: go install github.com/gophersatwork/goverhaul@latest
 
        - name: Check architecture
          run: goverhaul --path . --config .goverhaul.yml
    ```
+
+### Quickstart Example
+
+Copy and paste this complete example to get started immediately:
+
+```bash
+# Install Goverhaul
+`go install github.com/gophersatwork/goverhaul@latest`
+
+or with you are using go tool directive (1.24+):
+
+`go get -tool github.com/gophersatwork/goverhaul@latest`
+
+# Create a configuration file
+cat > .goverhaul.yml << EOL
+# Goverhaul configuration
+modfile: "go.mod"
+incremental: true
+cache_file: ".goverhaul.cache"
+
+rules:
+  # Core business logic should not depend on external packages
+  - path: "internal/core"
+    allowed:
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      - "internal/core"
+    prohibited:
+      - name: "internal/api"
+        cause: "Core should not depend on API layer"
+      - name: "internal/db"
+        cause: "Core should not depend on database layer"
+      - name: "github.com/external/database"
+        cause: "Core should not have direct database dependencies"
+
+  # API layer can import core but not database directly
+  - path: "internal/api"
+    prohibited:
+      - name: "internal/db"
+        cause: "API should access database through core interfaces"
+EOL
+
+# Run Goverhaul
+goverhaul --path .
+```
+
+This example creates a configuration that enforces a clean architecture pattern where:
+1. Core business logic is isolated from external dependencies
+2. API layer cannot access the database layer directly
+
+For more examples, check the [examples directory](examples/) in the repository.
 
 ### Command Line Options
 
@@ -120,7 +181,7 @@ rules:
 ### Configuration Options
 
 - `modfile`: Optional path to the go.mod file (default: `go.mod`)
-- `incremental`: Optional boolean to enable incremental analysis for faster subsequent runs (default: `true`)
+- `incremental`: Optional boolean to enable incremental analysis for faster subsequent runs (default: `false`)
 - `cache_file`: Optional path to the cache file for incremental analysis (default: `$HOME/.goverhaul/cache.json`)
 - `rules`: List of architectural rules to enforce
   - `path`: Package path to apply the rule to
@@ -129,7 +190,10 @@ rules:
     - `name`: Package name to prohibit
     - `cause`: Explanation for why the import is prohibited
 
-### How Rules Work
+> [!NOTE]  
+> Incremental analysis is an **experimental** feature.
+
+### How rules work
 
 - If `allowed` is specified, only those imports are permitted for the package
 - If `prohibited` is specified, those imports are not allowed for the package
@@ -137,9 +201,9 @@ rules:
 - Import paths can be standard library packages, third-party packages, or internal packages
 - For internal packages, you can use either the full import path (including module name) or the relative path
 
-### Advanced Rule Examples
+### Advanced rule examples
 
-#### Enforcing Architecture
+#### Enforcing architecture
 
 ```yaml
 rules:
@@ -171,7 +235,7 @@ rules:
         cause: "Infrastructure should not depend on use cases"
 ```
 
-#### Enforcing Module Boundaries
+#### Enforcing module boundaries
 
 ```yaml
 rules:
@@ -192,37 +256,37 @@ rules:
         cause: "API should access DB through core interfaces"
 ```
 
-## Best Practices for Defining Architectural Rules
+## Best practices for defining architectural rules
 
-### 1. Start with Clear Architectural Boundaries
+### 1. Start with clear architectural boundaries
 
 Before defining rules, establish a clear architectural vision:
 - Identify the main components/layers of your application
 - Define the intended dependencies between components
 - Document the architectural decisions and constraints
 
-### 2. Be Explicit About Allowed Imports
+### 2. Be explicit about allowed imports
 
 For critical packages (like domain models or core business logic):
 - Use the `allowed` list to explicitly whitelist permitted imports
 - Include only necessary standard library packages
 - Be conservative with third-party dependencies
 
-### 3. Use Prohibited Imports for Boundary Enforcement
+### 3. Use `prohibited` imports for boundary enforcement
 
 For packages with specific constraints:
 - Use `prohibited` to prevent unwanted dependencies
 - Always include a clear `cause` explaining the architectural constraint
 - Focus on preventing dependency cycles and maintaining layer separation
 
-### 4. Organize Rules by Architectural Concerns
+### 4. Organize rules by architectural concerns
 
 Group rules logically:
 - Layer-based rules (presentation, domain, data)
 - Feature module boundaries
 - Cross-cutting concerns (security, logging, etc.)
 
-### 5. Evolve Rules Incrementally
+### 5. Evolve rules incrementally
 
 As your project grows:
 - Start with a minimal set of critical rules
@@ -230,7 +294,7 @@ As your project grows:
 - Refine existing rules based on team feedback
 - Use the incremental analysis feature for faster feedback in large codebases
 
-### 6. Document Architectural Intent
+### 6. Document architectural intent
 
 Use the `cause` field effectively:
 - Explain the architectural principle being enforced
@@ -239,7 +303,7 @@ Use the `cause` field effectively:
 
 ## Use Cases
 
-### Enforcing Clean/Hexagonal Architecture
+### Enforcing clean/hexagonal architecture
 
 Goverhaul helps maintain the dependency rule in clean architecture:
 - Domain entities have no external dependencies
@@ -247,28 +311,21 @@ Goverhaul helps maintain the dependency rule in clean architecture:
 - Interface adapters depend on use cases but not frameworks
 - Frameworks and drivers are isolated at the boundaries
 
-### Preventing Dependency Cycles
-
-Detect and prevent circular dependencies between packages:
-- Identify potential cycles in your dependency graph
-- Define rules to enforce a directed acyclic graph (DAG)
-- Ensure changes don't introduce new cycles
-
-### Maintaining Module Boundaries
+### Maintaining module boundaries
 
 For multi-module projects:
 - Define clear boundaries between modules
 - Enforce API contracts between modules
 - Prevent implementation details from leaking across module boundaries
 
-### Controlling Third-Party Dependencies
+### Controlling third-party dependencies
 
 Limit the spread of external dependencies:
 - Restrict which packages can import specific third-party libraries
 - Isolate framework dependencies to adapter layers
 - Prevent core business logic from depending on external packages
 
-### Documenting Architectural Decisions
+### Documenting architectural decisions
 
 Use rules as executable documentation:
 - Encode architectural decisions as enforceable rules
@@ -278,19 +335,19 @@ Use rules as executable documentation:
 
 ## Troubleshooting
 
-### Common Issues and Solutions
+### Common issues and solutions
 
-#### Rule Not Being Applied
+#### Rule not being applied
 
 **Issue**: You've defined a rule, but it doesn't seem to be applied to your code.
 
 **Solutions**:
 - Verify that the `path` in your rule matches your project's package structure
-- Check that you're running Goverhaul with the correct `--path` argument
+- Check that you're running `goverhaul` with the correct `--path` argument
 - Use the `--verbose` flag to see which files are being analyzed
 - Ensure your Go files have proper package declarations
 
-#### Multiple Rule Matches
+#### Multiple rule matches
 
 **Issue**: You're getting unexpected results because multiple rules are matching the same package.
 
@@ -299,18 +356,18 @@ Use rules as executable documentation:
 - Review your rule order (**rules are evaluated in the order they appear in the config**)
 - Use the `--verbose` flag to see which rules are being applied
 
-#### Incremental Analysis Issues
+#### Incremental analysis issues
 
 **Issue**: Incremental analysis is not detecting changes or is skipping files that should be analyzed.
 
 **Solutions**:
-- Delete the cache file and run again
+- Delete the cache file and run again ¯\_(ツ)_/¯
 - Specify a custom cache file location with the `cache_file` option
 - Disable incremental analysis if you're experiencing issues
 
 #### Integration with CI/CD
 
-**Issue**: Goverhaul is failing in CI but works locally.
+**Issue**: `goverhaul` is failing in CI but works locally.
 
 **Solutions**:
 - Ensure your CI environment has the correct Go version
@@ -321,8 +378,8 @@ Use rules as executable documentation:
 
 ## License
 
-[MIT License](LICENSE)
+GNU General Public License (GPL v3)
 
 ## Contributing
 
-Contributions are welcome! Please feel free to open a discussion.
+Contributions are welcome! Please feel free to open a discussion/PR.

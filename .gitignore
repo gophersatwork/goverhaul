@@ -1,3 +1,20 @@
-.idea
+# Binaries for programs and plugins
+*.exe
+*.exe~
 goverhaul
-report_testing_findings.md
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+
+# IDE specific files
+.idea
+.vscode
+.DS_Store
+
+# Cache files
+.goverhaul.cache

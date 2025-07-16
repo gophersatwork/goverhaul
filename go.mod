@@ -1,4 +1,4 @@
-module github.com/alexrios/goverhaul
+module github.com/gophersatwork/goverhaul
 
 go 1.24.2
 

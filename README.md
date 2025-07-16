@@ -6,7 +6,11 @@
 [![GoDoc](https://godoc.org/github.com/gophersatwork/goverhaul?status.svg)](https://godoc.org/github.com/gophersatwork/goverhaul)
 [![GitHub release](https://img.shields.io/github/release/gophersatwork/goverhaul.svg)](https://github.com/gophersatwork/goverhaul/releases)
 
+<img src="assets/logo.png" width="200" height="200">
+
 Goverhaul is a CLI tool to enforce architectural rules in Go projects. It helps teams maintain the intended architecture by defining and enforcing import boundaries between packages.
+
+
 
 ## Features
 

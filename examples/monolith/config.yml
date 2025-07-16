@@ -1,0 +1,185 @@
+# Goverhaul Configuration for Monolithic Application
+# This example enforces a modular monolith architecture with clear boundaries
+# between different modules within a single application.
+
+rules:
+  # Core Module Rules
+  # The core module contains essential business logic and should not depend on other modules
+  - path: "internal/core"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      # Own package
+      - "internal/core"
+    prohibited:
+      - name: "internal/auth"
+        cause: "Core should not depend on auth module"
+      - name: "internal/api"
+        cause: "Core should not depend on api module"
+      - name: "internal/storage"
+        cause: "Core should not depend on storage module, define interfaces instead"
+      - name: "internal/notification"
+        cause: "Core should not depend on notification module"
+      - name: "internal/payment"
+        cause: "Core should not depend on payment module"
+
+  # Auth Module Rules
+  # The auth module handles authentication and authorization
+  - path: "internal/auth"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      - "crypto"
+      # Core for interfaces
+      - "internal/core"
+      # Own package
+      - "internal/auth"
+    prohibited:
+      - name: "internal/api"
+        cause: "Auth should not depend on api module"
+      - name: "internal/storage"
+        cause: "Auth should not depend on storage module directly"
+      - name: "internal/notification"
+        cause: "Auth should not depend on notification module"
+      - name: "internal/payment"
+        cause: "Auth should not depend on payment module"
+
+  # API Module Rules
+  # The API module handles HTTP requests and responses
+  - path: "internal/api"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "net/http"
+      - "strings"
+      # Other modules
+      - "internal/core"
+      - "internal/auth"
+      # Own package
+      - "internal/api"
+    prohibited:
+      - name: "internal/storage"
+        cause: "API should not depend on storage module directly, use core interfaces"
+      - name: "internal/notification"
+        cause: "API should not depend on notification module directly, use core interfaces"
+      - name: "internal/payment"
+        cause: "API should not depend on payment module directly, use core interfaces"
+
+  # Storage Module Rules
+  # The storage module handles database operations
+  - path: "internal/storage"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      - "database/sql"
+      # Core for interfaces
+      - "internal/core"
+      # Own package
+      - "internal/storage"
+      # Database drivers
+      - "github.com/lib/pq"
+      - "github.com/go-sql-driver/mysql"
+    prohibited:
+      - name: "internal/api"
+        cause: "Storage should not depend on api module"
+      - name: "internal/auth"
+        cause: "Storage should not depend on auth module"
+      - name: "internal/notification"
+        cause: "Storage should not depend on notification module"
+      - name: "internal/payment"
+        cause: "Storage should not depend on payment module"
+
+  # Notification Module Rules
+  # The notification module handles emails, SMS, etc.
+  - path: "internal/notification"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      - "net/smtp"
+      # Core for interfaces
+      - "internal/core"
+      # Own package
+      - "internal/notification"
+    prohibited:
+      - name: "internal/api"
+        cause: "Notification should not depend on api module"
+      - name: "internal/auth"
+        cause: "Notification should not depend on auth module"
+      - name: "internal/storage"
+        cause: "Notification should not depend on storage module"
+      - name: "internal/payment"
+        cause: "Notification should not depend on payment module"
+
+  # Payment Module Rules
+  # The payment module handles payment processing
+  - path: "internal/payment"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      - "net/http"
+      # Core for interfaces
+      - "internal/core"
+      # Own package
+      - "internal/payment"
+    prohibited:
+      - name: "internal/api"
+        cause: "Payment should not depend on api module"
+      - name: "internal/auth"
+        cause: "Payment should not depend on auth module"
+      - name: "internal/storage"
+        cause: "Payment should not depend on storage module"
+      - name: "internal/notification"
+        cause: "Payment should not depend on notification module"
+
+  # Main Application Rules
+  # The main application can import all modules
+  - path: "cmd"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      - "net/http"
+      - "os"
+      - "flag"
+      # All internal modules
+      - "internal/core"
+      - "internal/auth"
+      - "internal/api"
+      - "internal/storage"
+      - "internal/notification"
+      - "internal/payment"
+      # Own package
+      - "cmd"

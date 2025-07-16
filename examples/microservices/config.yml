@@ -1,0 +1,152 @@
+# Goverhaul Configuration for Microservices Architecture
+# This example enforces boundaries between different microservices and
+# ensures proper separation of concerns within each service.
+
+rules:
+  # User Service Rules
+  # The user service should not import other services directly
+  - path: "services/user"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "net/http"
+      - "strings"
+      # Own package
+      - "services/user"
+      # Shared libraries
+      - "pkg/common"
+      - "pkg/logger"
+      - "pkg/metrics"
+      - "pkg/auth"
+    prohibited:
+      - name: "services/order"
+        cause: "User service should not import order service directly, use API calls instead"
+      - name: "services/payment"
+        cause: "User service should not import payment service directly, use API calls instead"
+      - name: "services/notification"
+        cause: "User service should not import notification service directly, use API calls instead"
+
+  # Order Service Rules
+  - path: "services/order"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "net/http"
+      - "strings"
+      # Own package
+      - "services/order"
+      # Shared libraries
+      - "pkg/common"
+      - "pkg/logger"
+      - "pkg/metrics"
+      - "pkg/auth"
+    prohibited:
+      - name: "services/user"
+        cause: "Order service should not import user service directly, use API calls instead"
+      - name: "services/payment"
+        cause: "Order service should not import payment service directly, use API calls instead"
+      - name: "services/notification"
+        cause: "Order service should not import notification service directly, use API calls instead"
+
+  # Payment Service Rules
+  - path: "services/payment"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "net/http"
+      - "strings"
+      # Own package
+      - "services/payment"
+      # Shared libraries
+      - "pkg/common"
+      - "pkg/logger"
+      - "pkg/metrics"
+      - "pkg/auth"
+    prohibited:
+      - name: "services/user"
+        cause: "Payment service should not import user service directly, use API calls instead"
+      - name: "services/order"
+        cause: "Payment service should not import order service directly, use API calls instead"
+      - name: "services/notification"
+        cause: "Payment service should not import notification service directly, use API calls instead"
+
+  # Notification Service Rules
+  - path: "services/notification"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "net/http"
+      - "strings"
+      # Own package
+      - "services/notification"
+      # Shared libraries
+      - "pkg/common"
+      - "pkg/logger"
+      - "pkg/metrics"
+      - "pkg/auth"
+    prohibited:
+      - name: "services/user"
+        cause: "Notification service should not import user service directly, use API calls instead"
+      - name: "services/order"
+        cause: "Notification service should not import order service directly, use API calls instead"
+      - name: "services/payment"
+        cause: "Notification service should not import payment service directly, use API calls instead"
+
+  # API Gateway Rules
+  # The API gateway can import client libraries but not service implementations
+  - path: "gateway"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "net/http"
+      - "strings"
+      # Own package
+      - "gateway"
+      # Shared libraries
+      - "pkg/common"
+      - "pkg/logger"
+      - "pkg/metrics"
+      - "pkg/auth"
+      # Client libraries
+      - "clients/user"
+      - "clients/order"
+      - "clients/payment"
+      - "clients/notification"
+    prohibited:
+      - name: "services/user"
+        cause: "API Gateway should use client libraries, not service implementations"
+      - name: "services/order"
+        cause: "API Gateway should use client libraries, not service implementations"
+      - name: "services/payment"
+        cause: "API Gateway should use client libraries, not service implementations"
+      - name: "services/notification"
+        cause: "API Gateway should use client libraries, not service implementations"
+
+  # Shared Libraries Rules
+  # Shared libraries should not import service-specific code
+  - path: "pkg"
+    prohibited:
+      - name: "services"
+        cause: "Shared libraries should not depend on service implementations"
+      - name: "gateway"
+        cause: "Shared libraries should not depend on the API gateway"

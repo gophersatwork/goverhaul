@@ -1,0 +1,100 @@
+# Goverhaul Configuration for Layered Architecture
+# This example enforces a classic layered architecture pattern with:
+# - Presentation layer (API/UI)
+# - Application layer (Use cases/Services)
+# - Domain layer (Business logic/Entities)
+# - Infrastructure layer (Database/External services)
+
+rules:
+  # Domain Layer Rules
+  # The domain layer should be independent and not import other layers
+  - path: "internal/domain"
+    allowed:
+      # Standard library imports only
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      # Allow importing other domain packages
+      - "internal/domain"
+    prohibited:
+      - name: "internal/application"
+        cause: "Domain layer should not depend on application layer"
+      - name: "internal/api"
+        cause: "Domain layer should not depend on presentation layer"
+      - name: "internal/infrastructure"
+        cause: "Domain layer should not depend on infrastructure layer"
+      - name: "github.com/external/database"
+        cause: "Domain layer should not have direct database dependencies"
+
+  # Application Layer Rules
+  # The application layer can import domain but not infrastructure directly
+  - path: "internal/application"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      # Domain layer
+      - "internal/domain"
+      # Own package
+      - "internal/application"
+    prohibited:
+      - name: "internal/api"
+        cause: "Application layer should not depend on presentation layer"
+      - name: "internal/infrastructure"
+        cause: "Application layer should not depend on infrastructure directly, use interfaces defined in domain"
+      - name: "github.com/external/database"
+        cause: "Application layer should not have direct database dependencies"
+
+  # API/Presentation Layer Rules
+  # The API layer can import application and domain but not infrastructure
+  - path: "internal/api"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "net/http"
+      - "strings"
+      # Application and domain layers
+      - "internal/application"
+      - "internal/domain"
+      # Own package
+      - "internal/api"
+    prohibited:
+      - name: "internal/infrastructure"
+        cause: "API layer should not depend on infrastructure directly"
+      - name: "github.com/external/database"
+        cause: "API layer should not have direct database dependencies"
+
+  # Infrastructure Layer Rules
+  # The infrastructure layer can import domain but should avoid importing application and API
+  - path: "internal/infrastructure"
+    allowed:
+      # Standard library
+      - "context"
+      - "errors"
+      - "fmt"
+      - "time"
+      - "encoding/json"
+      - "strings"
+      - "database/sql"
+      # Domain layer for interfaces
+      - "internal/domain"
+      # Own package
+      - "internal/infrastructure"
+      # External dependencies
+      - "github.com/external/database"
+    prohibited:
+      - name: "internal/api"
+        cause: "Infrastructure layer should not depend on presentation layer"
+      - name: "internal/application"
+        cause: "Infrastructure layer should not depend on application layer"

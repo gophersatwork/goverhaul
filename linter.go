@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gophersatwork/granular"
 	"github.com/spf13/afero"
 	"golang.org/x/mod/modfile"
 )
@@ -22,7 +21,7 @@ var (
 type Goverhaul struct {
 	cfg    Config
 	logger *slog.Logger
-	cache  *LintCache
+	cache  *Cache
 
 	fs afero.Fs
 }
@@ -35,14 +34,12 @@ func NewLinter(cfg Config, logger *slog.Logger, fs afero.Fs) (*Goverhaul, error)
 	}
 
 	// Load cache for incremental analysis if enabled
-	var cache LintCache
-	var err error
 	if cfg.Incremental {
-		cache, err = linter.initializeCache(cfg.CacheFile)
-		linter.cache = &cache
+		cache, err := linter.initializeCache(cfg.CacheFile)
 		if err != nil {
 			return nil, err
 		}
+		linter.cache = cache
 	}
 
 	return linter, nil
@@ -70,14 +67,14 @@ func ensureLogger(logger *slog.Logger) *slog.Logger {
 }
 
 // initializeCache sets up the cache for incremental analysis
-func (g *Goverhaul) initializeCache(cachePath string) (LintCache, error) {
-	g.logger.Info("Using incremental analysis", "cache_file", cachePath)
+func (g *Goverhaul) initializeCache(cachePath string) (*Cache, error) {
+	g.logger.Info("Using incremental analysis with MUS encoding", "cache_file", cachePath)
 
-	gCache, err := granular.New(cachePath, granular.WithFs(g.fs))
+	cache, err := NewCache(cachePath, g.fs)
 	if err != nil {
-		return LintCache{}, NewCacheError("failed to load cache", err)
+		return nil, NewCacheError("failed to load cache", err)
 	}
-	return LintCache{gCache: gCache}, nil
+	return cache, nil
 }
 
 // walkAndLint walks the file system and lints each Go file

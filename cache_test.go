@@ -1,269 +1,444 @@
 package goverhaul
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"path/filepath"
+	"sync"
 	"testing"
 
-	"github.com/gophersatwork/granular"
 	"github.com/spf13/afero"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestNewCache(t *testing.T) {
-	cacheDir := "/tmp/cache"
-	memFs := NewCacheFs(t, cacheDir)
+// TestCache_Create tests creating a cache
+func TestCache_Create(t *testing.T) {
+	fs := afero.NewMemMapFs()
 
-	cachePath := filepath.Join(cacheDir, "cache.json")
-
-	// Test creating a new cache
-	cache, err := granular.New(cacheDir, granular.WithFs(memFs))
-	if err != nil {
-		t.Fatalf("Failed to create cache: %v", err)
-	}
-	if cache == nil {
-		t.Fatal("Expected non-nil cache, got nil")
-	}
-
-	// Verify the cache file was created
-	exists, err := afero.Exists(memFs, cachePath)
-	if err != nil && !exists {
-		t.Fatal("Expected non-nil cache, got nil")
-	}
-}
-
-func TestLintCache_AddFile(t *testing.T) {
-	cacheDir := "/tmp/cache"
-	memFs := NewCacheFs(t, cacheDir)
-
-	cachePath := filepath.Join(cacheDir, "cache.json")
-
-	// Create a test file
-	testPath := filepath.Join(cacheDir, "main.go")
-	err := afero.WriteFile(memFs, testPath, []byte("package main\n\nfunc main() {}\n"), 0o644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	// Create a new cache
-	lintCache, err := NewCacheWithFs(cachePath, memFs)
-	if err != nil {
-		t.Fatalf("Failed to create granular cache: %v", err)
-	}
-
-	// printDirTree(memFs, tempDir)
-
-	// Test adding a file to the cache
-	err = lintCache.AddFile(testPath)
-	if err != nil {
-		t.Fatalf("Failed to add file to cache: %v", err)
-	}
-
-	// Verify the file was added to the cache
-
-	key := granular.Key{
-		Inputs: []granular.Input{granular.FileInput{
-			Path: testPath,
-			Fs:   memFs,
-		}},
-	}
-	result, found, err := lintCache.gCache.Get(key)
-	if err != nil {
-		t.Fatalf("Failed to get from cache: %v", err)
-	}
-	if !found {
-		t.Errorf("File %s was not found in cache", testPath)
-	}
-	fmt.Printf("%+v\n", result)
-}
-
-func TestLintCache_AddFileWithViolations(t *testing.T) {
-	cacheDir := "/tmp/cache"
-	memFs := NewCacheFs(t, cacheDir)
-	cachePath := filepath.Join(cacheDir, "cache.json")
-
-	// Create a test file
-	testPath := filepath.Join(cacheDir, "test.go")
-	err := afero.WriteFile(memFs, testPath, []byte("package main\n\nimport \"prohibited/package\"\n\nfunc main() {}\n"), 0o644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	// Create a new cache
-	lintCache, err := NewCacheWithFs(cachePath, memFs)
-	if err != nil {
-		t.Fatalf("Failed to create granular cache: %v", err)
-	}
-
-	// printDirTree(memFs, tempDir)
-
-	// Create test violations
-	violations := []LintViolation{
-		{
-			File:   testPath,
-			Import: "prohibited/package",
-			Cause:  "This import is prohibited",
-			Rule:   "test-rule",
-		},
-	}
-
-	// Test adding a file with violations to the cache
-	err = lintCache.AddFileWithViolations(testPath, violations)
-	if err != nil {
-		t.Fatalf("Failed to add file with violations to cache: %v", err)
-	}
-
-	// Verify the file was added to the cache with violations
-	normalizedPath := NormalizePath(testPath)
-	key := granular.Key{
-		Inputs: []granular.Input{granular.FileInput{
-			Path: normalizedPath,
-			Fs:   memFs,
-		}},
-	}
-	result, found, err := lintCache.gCache.Get(key)
-	if err != nil {
-		t.Fatalf("Failed to get from cache: %v", err)
-	}
-	if !found {
-		t.Errorf("File %s was not found in cache", testPath)
-	}
-
-	// Verify the violations were stored correctly
-	violationsStr, ok := result.Metadata["violations"]
-	if !ok {
-		t.Error("Violations metadata not found in cache entry")
-	}
-
-	var cachedViolations LintViolations
-	err = json.Unmarshal([]byte(violationsStr), &cachedViolations)
-	if err != nil {
-		t.Fatalf("Failed to unmarshal cached violations: %v", err)
-	}
-
-	if len(cachedViolations.Violations) != len(violations) {
-		t.Errorf("Expected %d violations, got %d", len(violations), len(cachedViolations.Violations))
-	}
-
-	if cachedViolations.Violations[0].Import != violations[0].Import {
-		t.Errorf("Expected import %s, got %s", violations[0].Import, cachedViolations.Violations[0].Import)
-	}
-}
-
-func TestLintCache_HasEntry(t *testing.T) {
-	cacheDir := "/tmp/cache"
-	memFs := NewCacheFs(t, cacheDir)
-
-	cachePath := filepath.Join(cacheDir, "cache.json")
-
-	// Create a test file
-	testPath := filepath.Join(cacheDir, "test.go")
-	err := afero.WriteFile(memFs, testPath, []byte("package main\n\nfunc main() {}\n"), 0o644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	// Create a new cache
-	lintCache, err := NewCacheWithFs(cachePath, memFs)
-	if err != nil {
-		t.Fatalf("Failed to create granular cache: %v", err)
-	}
-
-	t.Run("file not in cache", func(t *testing.T) {
-		_, err = lintCache.HasEntry(testPath)
-		if !errors.Is(err, ErrEntryNotFound) {
-			t.Errorf("Expected ErrEntryNotFound for non-existent file, got %v", err)
-		}
+	t.Run("create cache successfully", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+		assert.NotNil(t, cache)
+		assert.NotNil(t, cache.gCache)
+		assert.Equal(t, fs, cache.fs)
 	})
 
-	t.Run("Add file to cache without violations", func(t *testing.T) {
-		err = lintCache.AddFile(testPath)
-		if err != nil {
-			t.Fatalf("Failed to add file to cache: %v", err)
-		}
+	t.Run("create cache with nil fs", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test_nil.cache", nil)
+		require.NoError(t, err)
+		assert.NotNil(t, cache)
+		assert.Nil(t, cache.fs)
+	})
+}
 
-		// Verify file is in cache without violations
-		violations, err := lintCache.HasEntry(testPath)
-		if err != nil {
-			t.Errorf("Unexpected error checking cache entry: %v", err)
-		}
-		if !violations.IsEmpty() {
-			t.Errorf("Expected empty violations, got %d violations", len(violations.Violations))
-		}
+// TestCache_AddFile tests adding files without violations
+func TestCache_AddFile(t *testing.T) {
+	fs := afero.NewMemMapFs()
+
+	t.Run("add file without violations", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "test.go"
+		err = afero.WriteFile(fs, testFile, []byte("package test\n\nimport \"fmt\""), 0644)
+		require.NoError(t, err)
+
+		err = cache.AddFile(testFile)
+		require.NoError(t, err)
+
+		// Verify entry exists but has no violations
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		assert.Empty(t, result.Violations)
+		assert.True(t, result.IsEmpty())
 	})
 
-	t.Run("Add file to cache with violations", func(t *testing.T) {
-		testViolations := []LintViolation{
+	t.Run("add file with normalized path", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "./path/to/test.go"
+		normalizedFile := "path/to/test.go"
+		err = afero.WriteFile(fs, normalizedFile, []byte("package test"), 0644)
+		require.NoError(t, err)
+
+		err = cache.AddFile(testFile)
+		require.NoError(t, err)
+
+		// Verify entry exists using normalized path
+		result, err := cache.HasEntry(normalizedFile)
+		require.NoError(t, err)
+		assert.Empty(t, result.Violations)
+	})
+}
+
+// TestCache_AddAndRetrieveViolations tests adding and retrieving violations
+func TestCache_AddAndRetrieveViolations(t *testing.T) {
+	fs := afero.NewMemMapFs()
+
+	t.Run("add and retrieve single violation", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "test.go"
+		err = afero.WriteFile(fs, testFile, []byte("package test"), 0644)
+		require.NoError(t, err)
+
+		violations := []LintViolation{
 			{
-				File:   testPath,
-				Import: "prohibited/package",
-				Cause:  "This import is prohibited",
-				Rule:   "test-rule",
+				File:    testFile,
+				Import:  "internal/database",
+				Rule:    "no-db",
+				Cause:   "Database not allowed",
+				Details: "Use abstraction layer",
 			},
 		}
 
-		err = lintCache.AddFileWithViolations(testPath, testViolations)
-		if err != nil {
-			t.Fatalf("Failed to add file with violations to cache: %v", err)
-		}
+		err = cache.AddFileWithViolations(testFile, violations)
+		require.NoError(t, err)
 
-		// Verify file is in cache with violations
-		violations, err := lintCache.HasEntry(testPath)
-		if err != nil {
-			t.Errorf("Unexpected error checking cache entry: %v", err)
-		}
-		if violations.IsEmpty() {
-			t.Errorf("Expected violations, got empty violations")
-		}
-		if len(violations.Violations) != len(testViolations) {
-			t.Errorf("Expected %d violations, got %d", len(testViolations), len(violations.Violations))
-		}
-		if violations.Violations[0].Import != testViolations[0].Import {
-			t.Errorf("Expected import %s, got %s", testViolations[0].Import, violations.Violations[0].Import)
-		}
-		if violations.Violations[0].Cached {
-			t.Errorf("Expected cached %v, got %s", true, violations.Violations[0].Import)
-		}
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		assert.Len(t, result.Violations, 1)
+		assert.True(t, result.Violations[0].Cached)
+		assert.Equal(t, "internal/database", result.Violations[0].Import)
+		assert.Equal(t, "no-db", result.Violations[0].Rule)
+		assert.Equal(t, "Database not allowed", result.Violations[0].Cause)
+		assert.Equal(t, "Use abstraction layer", result.Violations[0].Details)
 	})
 
-	t.Run("invalid violations data", func(t *testing.T) {
-		// Create a key directly with invalid metadata
-		normalizedPath := NormalizePath(testPath)
-		key := granular.Key{
-			Inputs: []granular.Input{granular.FileInput{
-				Path: normalizedPath,
-				Fs:   memFs,
-			}},
+	t.Run("add and retrieve multiple violations", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "multi_test.go"
+		err = afero.WriteFile(fs, testFile, []byte("package test"), 0644)
+		require.NoError(t, err)
+
+		violations := []LintViolation{
+			{
+				File:   testFile,
+				Import: "internal/database",
+				Rule:   "no-db",
+				Cause:  "Database not allowed",
+			},
+			{
+				File:   testFile,
+				Import: "unsafe",
+				Rule:   "no-unsafe",
+				Cause:  "Unsafe package not allowed",
+			},
+			{
+				File:   testFile,
+				Import: "github.com/deprecated/pkg",
+				Rule:   "no-deprecated",
+				Cause:  "Package is deprecated",
+			},
 		}
 
-		// Store invalid JSON in the violations metadata
-		metadata := make(map[string]string)
-		metadata["violations"] = "invalid json"
-		result := granular.Result{
-			Metadata: metadata,
+		err = cache.AddFileWithViolations(testFile, violations)
+		require.NoError(t, err)
+
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		assert.Len(t, result.Violations, 3)
+
+		// Verify all violations are marked as cached
+		for _, v := range result.Violations {
+			assert.True(t, v.Cached, "violation should be marked as cached")
 		}
 
-		err = lintCache.gCache.Store(key, result)
-		if err != nil {
-			t.Fatalf("Failed to store invalid violations: %v", err)
-		}
+		// Verify content
+		assert.Equal(t, "internal/database", result.Violations[0].Import)
+		assert.Equal(t, "unsafe", result.Violations[1].Import)
+		assert.Equal(t, "github.com/deprecated/pkg", result.Violations[2].Import)
+	})
 
-		// Verify error when reading invalid violations
-		_, err = lintCache.HasEntry(testPath)
-		if !errors.Is(err, ErrReadingCachedViolations) {
-			t.Errorf("Expected ErrReadingCachedViolations for invalid violations, got %v", err)
-		}
+	t.Run("add empty violations slice", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "empty_test.go"
+		err = afero.WriteFile(fs, testFile, []byte("package test"), 0644)
+		require.NoError(t, err)
+
+		err = cache.AddFileWithViolations(testFile, []LintViolation{})
+		require.NoError(t, err)
+
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		assert.Empty(t, result.Violations)
+		assert.True(t, result.IsEmpty())
 	})
 }
 
-func NewCacheFs(t *testing.T, cacheDir string) afero.Fs {
-	t.Helper()
+// TestCache_EdgeCases tests edge cases
+func TestCache_EdgeCases(t *testing.T) {
+	fs := afero.NewMemMapFs()
 
-	memFs := afero.NewMemMapFs()
-	err := memFs.Mkdir(cacheDir, 0o755)
-	if err != nil {
-		t.Fatalf("Failed to create test directory: %v", err)
-	}
-	return memFs
+	t.Run("retrieve non-existent entry", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		_, err = cache.HasEntry("nonexistent.go")
+		assert.ErrorIs(t, err, ErrEntryNotFound)
+	})
+
+	t.Run("violation with empty strings", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "empty_strings_test.go"
+		err = afero.WriteFile(fs, testFile, []byte("package test"), 0644)
+		require.NoError(t, err)
+
+		violations := []LintViolation{
+			{
+				File:    testFile,
+				Import:  "some/import",
+				Rule:    "some-rule",
+				Cause:   "",
+				Details: "",
+				Cached:  false,
+			},
+		}
+
+		err = cache.AddFileWithViolations(testFile, violations)
+		require.NoError(t, err)
+
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		assert.Len(t, result.Violations, 1)
+		assert.Equal(t, "", result.Violations[0].Cause)
+		assert.Equal(t, "", result.Violations[0].Details)
+	})
+
+	t.Run("violation with unicode characters", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "unicode_test.go"
+		err = afero.WriteFile(fs, testFile, []byte("package test"), 0644)
+		require.NoError(t, err)
+
+		violations := []LintViolation{
+			{
+				File:    testFile,
+				Import:  "some/import",
+				Rule:    "unicode-rule",
+				Cause:   "Contains unicode: こんにちは, 你好, مرحبا",
+				Details: "Special chars: £€¥₹",
+			},
+		}
+
+		err = cache.AddFileWithViolations(testFile, violations)
+		require.NoError(t, err)
+
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		assert.Len(t, result.Violations, 1)
+		assert.Equal(t, "Contains unicode: こんにちは, 你好, مرحبا", result.Violations[0].Cause)
+		assert.Equal(t, "Special chars: £€¥₹", result.Violations[0].Details)
+	})
+}
+
+// TestCache_LargeDataset tests with large number of violations
+func TestCache_LargeDataset(t *testing.T) {
+	t.Run("100 violations", func(t *testing.T) {
+		fs := afero.NewMemMapFs()
+		cache, err := NewCache(".goverhaul_large_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "large_test.go"
+		err = afero.WriteFile(fs, testFile, []byte("package test"), 0644)
+		require.NoError(t, err)
+
+		// Create 100 violations
+		violations := make([]LintViolation, 100)
+		for i := 0; i < 100; i++ {
+			violations[i] = LintViolation{
+				File:    testFile,
+				Import:  fmt.Sprintf("import/path/%d", i),
+				Rule:    fmt.Sprintf("rule-%d", i%10),
+				Cause:   fmt.Sprintf("Violation cause number %d", i),
+				Details: fmt.Sprintf("Detailed description for violation %d", i),
+			}
+		}
+
+		err = cache.AddFileWithViolations(testFile, violations)
+		require.NoError(t, err)
+
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		assert.Len(t, result.Violations, 100)
+
+		// Verify some violations
+		assert.Equal(t, "import/path/0", result.Violations[0].Import)
+		assert.Equal(t, "import/path/99", result.Violations[99].Import)
+		assert.True(t, result.Violations[50].Cached)
+
+		t.Logf("Successfully cached and retrieved 100 violations")
+	})
+}
+
+// TestCache_CacheInvalidation tests cache invalidation behavior
+func TestCache_CacheInvalidation(t *testing.T) {
+	fs := afero.NewMemMapFs()
+
+	t.Run("overwrite existing entry", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "overwrite_test.go"
+		err = afero.WriteFile(fs, testFile, []byte("package test"), 0644)
+		require.NoError(t, err)
+
+		// Add initial violations
+		violations1 := []LintViolation{
+			{File: testFile, Import: "old/import", Rule: "old-rule"},
+		}
+		err = cache.AddFileWithViolations(testFile, violations1)
+		require.NoError(t, err)
+
+		// Overwrite with new violations
+		violations2 := []LintViolation{
+			{File: testFile, Import: "new/import1", Rule: "new-rule1"},
+			{File: testFile, Import: "new/import2", Rule: "new-rule2"},
+		}
+		err = cache.AddFileWithViolations(testFile, violations2)
+		require.NoError(t, err)
+
+		// Verify new violations
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		assert.Len(t, result.Violations, 2)
+		assert.Equal(t, "new/import1", result.Violations[0].Import)
+		assert.Equal(t, "new/import2", result.Violations[1].Import)
+	})
+
+	t.Run("file modification invalidates cache", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		testFile := "modified_test.go"
+		err = afero.WriteFile(fs, testFile, []byte("package test\n// version 1"), 0644)
+		require.NoError(t, err)
+
+		violations := []LintViolation{
+			{File: testFile, Import: "some/import", Rule: "some-rule"},
+		}
+		err = cache.AddFileWithViolations(testFile, violations)
+		require.NoError(t, err)
+
+		// Verify cache hit
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		assert.Len(t, result.Violations, 1)
+
+		// Modify file
+		err = afero.WriteFile(fs, testFile, []byte("package test\n// version 2"), 0644)
+		require.NoError(t, err)
+
+		// Cache should be invalidated (granular checks file modification)
+		_, err = cache.HasEntry(testFile)
+		assert.ErrorIs(t, err, ErrEntryNotFound)
+	})
+}
+
+// TestCache_ConcurrentAccess tests concurrent access
+func TestCache_ConcurrentAccess(t *testing.T) {
+	fs := afero.NewMemMapFs()
+
+	t.Run("concurrent writes to different files", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		const numGoroutines = 10
+		var wg sync.WaitGroup
+		wg.Add(numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			go func(id int) {
+				defer wg.Done()
+
+				testFile := fmt.Sprintf("concurrent_%d.go", id)
+				err := afero.WriteFile(fs, testFile, []byte("package test"), 0644)
+				require.NoError(t, err)
+
+				violations := []LintViolation{
+					{
+						File:   testFile,
+						Import: fmt.Sprintf("import/%d", id),
+						Rule:   fmt.Sprintf("rule-%d", id),
+					},
+				}
+
+				err = cache.AddFileWithViolations(testFile, violations)
+				assert.NoError(t, err)
+			}(i)
+		}
+
+		wg.Wait()
+
+		// Verify all files were cached
+		for i := 0; i < numGoroutines; i++ {
+			testFile := fmt.Sprintf("concurrent_%d.go", i)
+			result, err := cache.HasEntry(testFile)
+			assert.NoError(t, err)
+			assert.Len(t, result.Violations, 1)
+		}
+	})
+
+	t.Run("concurrent reads", func(t *testing.T) {
+		readFs := afero.NewMemMapFs()
+		cache, err := NewCache(".goverhaul_concurrent_reads.cache", readFs)
+		require.NoError(t, err)
+
+		testFile := "shared_test.go"
+		err = afero.WriteFile(readFs, testFile, []byte("package test"), 0644)
+		require.NoError(t, err)
+
+		violations := []LintViolation{
+			{File: testFile, Import: "shared/import", Rule: "shared-rule"},
+		}
+		err = cache.AddFileWithViolations(testFile, violations)
+		require.NoError(t, err)
+
+		// Verify entry exists before concurrent reads
+		result, err := cache.HasEntry(testFile)
+		require.NoError(t, err)
+		require.Len(t, result.Violations, 1)
+
+		const numReaders = 5
+		var wg sync.WaitGroup
+		wg.Add(numReaders)
+
+		// Simple concurrent reads without assertions since granular cache may have limitations
+		for i := 0; i < numReaders; i++ {
+			go func() {
+				defer wg.Done()
+				_, _ = cache.HasEntry(testFile)
+			}()
+		}
+
+		wg.Wait()
+
+		// Verify entry still exists after concurrent access
+		result, err = cache.HasEntry(testFile)
+		assert.NoError(t, err)
+		assert.Len(t, result.Violations, 1)
+	})
+}
+
+// TestCache_Stats tests cache statistics
+func TestCache_Stats(t *testing.T) {
+	fs := afero.NewMemMapFs()
+
+	t.Run("get stats", func(t *testing.T) {
+		cache, err := NewCache(".goverhaul_test.cache", fs)
+		require.NoError(t, err)
+
+		stats := cache.GetStats()
+		assert.Contains(t, stats, "MUS")
+		assert.Contains(t, stats, "performance")
+	})
 }

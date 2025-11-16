@@ -1,41 +1,44 @@
 package goverhaul
 
 import (
-	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/gophersatwork/granular"
+	"github.com/mus-format/mus-go/ord"
+	"github.com/mus-format/mus-go/varint"
 	"github.com/spf13/afero"
 )
 
-type LintCache struct {
+// Cache provides high-performance caching using MUS serialization.
+// MUS is a binary serialization format optimized for speed and size.
+// This implementation uses varint encoding and ord package for optimal performance.
+type Cache struct {
 	gCache *granular.Cache
 	fs     afero.Fs
 }
 
-func NewCache(path string) (*LintCache, error) {
-	cache, err := granular.New(path)
-	if err != nil {
-		return nil, err
+// NewCache creates a new cache with MUS encoding for maximum performance.
+// MUS uses varint encoding and manual serialization for optimal efficiency.
+func NewCache(path string, fs afero.Fs) (*Cache, error) {
+	opts := []granular.Option{}
+	if fs != nil {
+		opts = append(opts, granular.WithFs(fs))
 	}
-	return &LintCache{
-		gCache: cache,
-	}, nil
-}
 
-func NewCacheWithFs(path string, fs afero.Fs) (*LintCache, error) {
-	cache, err := granular.New(path, granular.WithFs(fs))
+	cache, err := granular.New(path, opts...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create granular cache: %w", err)
 	}
-	return &LintCache{
+
+	return &Cache{
 		gCache: cache,
 		fs:     fs,
 	}, nil
 }
 
-func (c *LintCache) AddFile(path string) error {
-	// Normalize the path for consistent caching
+// AddFile adds a file entry to the cache without violations
+func (c *Cache) AddFile(path string) error {
 	normalizedPath := NormalizePath(path)
 	key := granular.Key{
 		Inputs: []granular.Input{granular.FileInput{
@@ -43,16 +46,12 @@ func (c *LintCache) AddFile(path string) error {
 			Fs:   c.fs,
 		}},
 	}
-	err := c.gCache.Store(key, granular.Result{})
-	if err != nil {
-		return err
-	}
 
-	return nil
+	return c.gCache.Store(key, granular.Result{})
 }
 
-func (c *LintCache) AddFileWithViolations(path string, lv []LintViolation) error {
-	// Normalize the path for consistent caching
+// AddFileWithViolations stores violations for a file using MUS encoding
+func (c *Cache) AddFileWithViolations(path string, lv []LintViolation) error {
 	normalizedPath := NormalizePath(path)
 
 	key := granular.Key{
@@ -62,36 +61,33 @@ func (c *LintCache) AddFileWithViolations(path string, lv []LintViolation) error
 		}},
 	}
 
-	metadata := make(map[string]string)
-	// Create a LintViolations struct to hold the violations
 	violations := LintViolations{
 		Violations: lv,
 	}
-	lvBytes, err := json.Marshal(violations)
+
+	// Encode violations using MUS with varint encoding
+	data, err := marshalLintViolations(violations)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to encode violations: %w", err)
 	}
 
-	metadata["violations"] = string(lvBytes)
+	metadata := map[string]string{
+		"violations": string(data),
+	}
+
 	res := granular.Result{
 		Metadata: metadata,
 	}
 
-	err = c.gCache.Store(key, res)
-	if err != nil {
-		return err
+	if err := c.gCache.Store(key, res); err != nil {
+		return fmt.Errorf("failed to store in cache: %w", err)
 	}
 
 	return nil
 }
 
-var (
-	ErrEntryNotFound           = errors.New("entry not found")
-	ErrReadingCachedViolations = errors.New("cached violations are invalid")
-)
-
-func (c *LintCache) HasEntry(filePath string) (LintViolations, error) {
-	// Normalize the path for consistent caching
+// HasEntry checks if a file has cached violations and returns them
+func (c *Cache) HasEntry(filePath string) (LintViolations, error) {
 	normalizedPath := NormalizePath(filePath)
 
 	key := granular.Key{
@@ -102,8 +98,6 @@ func (c *LintCache) HasEntry(filePath string) (LintViolations, error) {
 	}
 
 	result, found, _ := c.gCache.Get(key)
-	var err error
-
 	if !found {
 		return LintViolations{}, ErrEntryNotFound
 	}
@@ -113,10 +107,191 @@ func (c *LintCache) HasEntry(filePath string) (LintViolations, error) {
 		return LintViolations{}, nil
 	}
 
-	var lv LintViolations
-	err = json.Unmarshal([]byte(violations), &lv)
+	// Decode violations using MUS
+	lv, err := unmarshalLintViolations([]byte(violations))
 	if err != nil {
-		return LintViolations{}, ErrReadingCachedViolations
+		return LintViolations{}, fmt.Errorf("%w: %v", ErrReadingCachedViolations, err)
 	}
+
+	// Mark violations as cached
+	for i := range lv.Violations {
+		lv.Violations[i].Cached = true
+	}
+
 	return lv, nil
+}
+
+// Clear removes all entries from the cache
+func (c *Cache) Clear() error {
+	// This would need to be implemented in the granular package
+	// For now, return an error indicating it's not supported
+	return errors.New("clear operation not supported by underlying cache")
+}
+
+// GetStats returns cache statistics
+func (c *Cache) GetStats() string {
+	return "Cache using MUS encoding with varint for maximum performance and minimal size"
+}
+
+// marshalLintViolations serializes LintViolations using MUS format with varint encoding
+func marshalLintViolations(lv LintViolations) ([]byte, error) {
+	// Pre-calculate size for efficient allocation
+	size := lintViolationsSize(lv)
+	buf := make([]byte, size)
+
+	n := marshalLintViolationsTo(lv, buf)
+	return buf[:n], nil
+}
+
+// unmarshalLintViolations deserializes LintViolations from MUS format
+func unmarshalLintViolations(data []byte) (LintViolations, error) {
+	lv, _, err := unmarshalLintViolationsFrom(data)
+	return lv, err
+}
+
+// lintViolationsSize calculates the exact size needed for MUS encoding
+func lintViolationsSize(lv LintViolations) int {
+	// Size of the violations slice length (varint encoded)
+	size := varint.Uint64.Size(uint64(len(lv.Violations)))
+
+	// Size of each violation
+	for _, v := range lv.Violations {
+		size += lintViolationSize(v)
+	}
+
+	return size
+}
+
+// lintViolationSize calculates the size needed for a single LintViolation
+// Uses ord.SizeString with varint encoding for optimal space efficiency
+func lintViolationSize(v LintViolation) int {
+	size := 0
+	size += ord.SizeString(v.File, varint.PositiveInt)
+	size += ord.SizeString(v.Import, varint.PositiveInt)
+	size += ord.SizeString(v.Rule, varint.PositiveInt)
+	size += ord.SizeString(v.Cause, varint.PositiveInt)
+	size += ord.SizeString(v.Details, varint.PositiveInt)
+	size += ord.Bool.Size(v.Cached)
+	return size
+}
+
+// marshalLintViolationsTo serializes LintViolations into the provided buffer
+func marshalLintViolationsTo(lv LintViolations, buf []byte) int {
+	// Marshal the number of violations using varint
+	n := varint.Uint64.Marshal(uint64(len(lv.Violations)), buf)
+
+	// Marshal each violation
+	for _, v := range lv.Violations {
+		n += marshalLintViolationTo(v, buf[n:])
+	}
+
+	return n
+}
+
+// marshalLintViolationTo serializes a single LintViolation into the buffer
+// Uses ord.MarshalString with varint for length encoding
+func marshalLintViolationTo(v LintViolation, buf []byte) int {
+	n := ord.MarshalString(v.File, varint.PositiveInt, buf)
+	n += ord.MarshalString(v.Import, varint.PositiveInt, buf[n:])
+	n += ord.MarshalString(v.Rule, varint.PositiveInt, buf[n:])
+	n += ord.MarshalString(v.Cause, varint.PositiveInt, buf[n:])
+	n += ord.MarshalString(v.Details, varint.PositiveInt, buf[n:])
+	n += ord.Bool.Marshal(v.Cached, buf[n:])
+	return n
+}
+
+// unmarshalLintViolationsFrom deserializes LintViolations from the buffer
+func unmarshalLintViolationsFrom(buf []byte) (LintViolations, int, error) {
+	var lv LintViolations
+
+	// Unmarshal the number of violations using varint
+	length, n, err := varint.Uint64.Unmarshal(buf)
+	if err != nil {
+		return lv, n, fmt.Errorf("failed to unmarshal violations length: %w", err)
+	}
+
+	// Pre-allocate slice with exact capacity for efficiency
+	lv.Violations = make([]LintViolation, length)
+
+	// Unmarshal each violation
+	for i := uint64(0); i < length; i++ {
+		v, bytesRead, err := unmarshalLintViolationFrom(buf[n:])
+		if err != nil {
+			return lv, n, fmt.Errorf("failed to unmarshal violation at index %d: %w", i, err)
+		}
+		lv.Violations[i] = v
+		n += bytesRead
+	}
+
+	return lv, n, nil
+}
+
+// unmarshalLintViolationFrom deserializes a single LintViolation from the buffer
+// Manual unmarshaling matching the marshal format
+func unmarshalLintViolationFrom(buf []byte) (LintViolation, int, error) {
+	var v LintViolation
+	var n int
+
+	// Helper function to unmarshal a string with varint length
+	unmarshalString := func(data []byte) (string, int, error) {
+		// Read length as varint
+		length, bytesRead, err := varint.PositiveInt.Unmarshal(data)
+		if err != nil {
+			return "", 0, fmt.Errorf("failed to read string length: %w", err)
+		}
+
+		// Read string bytes
+		if len(data[bytesRead:]) < length {
+			return "", bytesRead, fmt.Errorf("buffer too small for string of length %d", length)
+		}
+
+		str := string(data[bytesRead : bytesRead+length])
+		return str, bytesRead + length, nil
+	}
+
+	// Unmarshal File
+	var m int
+	var err error
+	v.File, m, err = unmarshalString(buf[n:])
+	if err != nil {
+		return v, n, fmt.Errorf("failed to unmarshal File: %w", err)
+	}
+	n += m
+
+	// Unmarshal Import
+	v.Import, m, err = unmarshalString(buf[n:])
+	if err != nil {
+		return v, n, fmt.Errorf("failed to unmarshal Import: %w", err)
+	}
+	n += m
+
+	// Unmarshal Rule
+	v.Rule, m, err = unmarshalString(buf[n:])
+	if err != nil {
+		return v, n, fmt.Errorf("failed to unmarshal Rule: %w", err)
+	}
+	n += m
+
+	// Unmarshal Cause
+	v.Cause, m, err = unmarshalString(buf[n:])
+	if err != nil {
+		return v, n, fmt.Errorf("failed to unmarshal Cause: %w", err)
+	}
+	n += m
+
+	// Unmarshal Details
+	v.Details, m, err = unmarshalString(buf[n:])
+	if err != nil {
+		return v, n, fmt.Errorf("failed to unmarshal Details: %w", err)
+	}
+	n += m
+
+	// Unmarshal Cached
+	v.Cached, m, err = ord.Bool.Unmarshal(buf[n:])
+	if err != nil {
+		return v, n, fmt.Errorf("failed to unmarshal Cached: %w", err)
+	}
+	n += m
+
+	return v, n, nil
 }

@@ -1,6 +1,7 @@
 package goverhaul
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -127,3 +128,9 @@ func NewLintError(message string, err error) error {
 func NewCacheError(message string, err error) error {
 	return NewError(message, err)
 }
+
+// Cache-related errors
+var (
+	ErrEntryNotFound           = errors.New("entry not found")
+	ErrReadingCachedViolations = errors.New("cached violations are invalid")
+)

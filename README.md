@@ -1,5 +1,7 @@
 # Goverhaul
 
+> High-performance Go architecture linter with watch mode for instant feedback
+
 [![Build Status](https://github.com/gophersatwork/goverhaul/workflows/Run%20Tests/badge.svg)](https://github.com/gophersatwork/goverhaul/actions?query=workflow%3A%22Run+Tests%22)
 [![Code Coverage](https://codecov.io/gh/gophersatwork/goverhaul/branch/main/graph/badge.svg)](https://codecov.io/gh/gophersatwork/goverhaul)
 [![Go Report Card](https://goreportcard.com/badge/github.com/gophersatwork/goverhaul)](https://goreportcard.com/report/github.com/gophersatwork/goverhaul)
@@ -17,6 +19,9 @@ Goverhaul is a high-performance CLI tool to enforce architectural rules in Go pr
 - Generate visual dependency graphs
 - **High-performance caching** using MUS binary encoding
 - **Incremental analysis** for fast subsequent runs
+- **Watch mode** for continuous file monitoring with instant feedback
+- Real-time violation detection with debouncing
+- Config hot-reload for dynamic rule updates
 - Simple YAML configuration
 - Easy CI/CD integration
 
@@ -110,6 +115,68 @@ goverhaul --path . --config .goverhaul.yml --verbose
 
 # Analyze specific directory
 goverhaul --path ./internal --config .goverhaul.yml
+
+# Group violations by rule instead of file
+goverhaul --path . --config .goverhaul.yml --group-by-rule
+
+# Control colored output
+goverhaul --path . --config .goverhaul.yml --color=always  # or never, auto
+```
+
+### Watch Mode - Continuous Monitoring
+
+Watch mode continuously monitors your Go files for changes and automatically re-runs the linter when changes are detected:
+
+```bash
+# Watch current directory
+goverhaul watch
+
+# Watch specific path
+goverhaul watch --path ./internal
+
+# Custom config
+goverhaul watch --config .goverhaul.yml
+
+# Combine with other options
+goverhaul watch --path . --group-by-rule --verbose
+```
+
+**Watch Mode Features:**
+- **Real-time file monitoring** using fsnotify
+- **Intelligent debouncing** groups rapid changes (100ms window)
+- **Incremental analysis** - only re-analyzes changed files
+- **Config hot-reload** - automatically reloads and re-analyzes when config changes
+- **Beautiful colored output** with progress indicators
+- **Sub-100ms analysis time** thanks to MUS cache
+- **Graceful shutdown** with Ctrl+C
+
+**Example Watch Session:**
+
+```
+╭─────────────────────────────────────────────────────╮
+│  Goverhaul Watch Mode                               │
+╰─────────────────────────────────────────────────────╯
+
+✅ No violations found
+
+👀 Watching /home/user/project for changes...
+Press Ctrl+C to stop
+
+[13:45:23] 📝 internal/api/handler.go changed
+[13:45:23] ⚡ Re-analyzing 1 file...
+[13:45:23] ✅ No violations found
+
+[13:46:15] 📝 internal/domain/user.go changed
+[13:46:15] ⚡ Re-analyzing 1 file...
+[13:46:15] ❌ Found 1 violation
+
+  📁 internal/domain/user.go
+     (1 violations)
+
+     ❌ import "internal/infrastructure" · line 5:2
+        Rule: domain-no-infra
+        Severity: error
+        Domain should not depend on infrastructure
 ```
 
 ### Command Line Options
@@ -117,6 +184,8 @@ goverhaul --path ./internal --config .goverhaul.yml
 - `--path`: Path to analyze (default: ".")
 - `--config`: Configuration file path (default: "$HOME/.goverhaul.yml")
 - `--verbose`: Enable verbose logging for debugging
+- `--group-by-rule`: Group violations by rule instead of file
+- `--color`: When to use colors: auto, always, never (default: "auto")
 
 ## Configuration
 

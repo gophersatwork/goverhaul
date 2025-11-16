@@ -19,6 +19,8 @@ const (
 	EncoderJSON CacheEncoder = iota
 	// EncoderGob uses Gob encoding (faster, smaller, but binary)
 	EncoderGob
+	// EncoderMUS uses MUS encoding (fastest, most compact, binary)
+	EncoderMUS
 )
 
 // CacheConfig holds configuration for the cache
@@ -59,6 +61,15 @@ func NewGobCache(path string, fs afero.Fs) (*ImprovedLintCache, error) {
 	return NewImprovedCache(CacheConfig{
 		Path:    path,
 		Encoder: EncoderGob,
+		Fs:      fs,
+	})
+}
+
+// NewMusCacheIntegrated creates a cache with MUS encoding (best performance)
+func NewMusCacheIntegrated(path string, fs afero.Fs) (*ImprovedLintCache, error) {
+	return NewImprovedCache(CacheConfig{
+		Path:    path,
+		Encoder: EncoderMUS,
 		Fs:      fs,
 	})
 }
@@ -159,6 +170,10 @@ func (c *ImprovedLintCache) encodeViolations(v LintViolations) (string, error) {
 		// Convert to string for storage in metadata
 		return buf.String(), nil
 
+	case EncoderMUS:
+		// Use the MUS encoder from cache_mus.go
+		return encodeMusViolations(v)
+
 	case EncoderJSON:
 		fallthrough
 	default:
@@ -181,6 +196,10 @@ func (c *ImprovedLintCache) decodeViolations(data string, encoder CacheEncoder) 
 		if err := dec.Decode(&lv); err != nil {
 			return LintViolations{}, err
 		}
+
+	case EncoderMUS:
+		// Use the MUS decoder from cache_mus.go
+		return decodeMusViolations(data)
 
 	case EncoderJSON:
 		fallthrough
@@ -209,8 +228,11 @@ type CacheStats struct {
 // GetStats returns cache statistics
 func (c *ImprovedLintCache) GetStats() CacheStats {
 	encoderName := "json"
-	if c.encoder == EncoderGob {
+	switch c.encoder {
+	case EncoderGob:
 		encoderName = "gob"
+	case EncoderMUS:
+		encoderName = "mus"
 	}
 
 	return CacheStats{

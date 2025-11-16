@@ -6,6 +6,8 @@ require (
 	github.com/charmbracelet/fang v0.2.0
 	github.com/gophersatwork/granular v0.1.0
 	github.com/mus-format/mus-go v0.7.2
+	github.com/sourcegraph/go-lsp v0.0.0-20240223163137-f80c5dd31dfd
+	github.com/sourcegraph/jsonrpc2 v0.2.1
 	github.com/spf13/afero v1.14.0
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.20.1

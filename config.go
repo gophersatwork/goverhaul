@@ -22,8 +22,18 @@ type Rule struct {
 }
 
 type ProhibitedPkg struct {
-	Name  string `yaml:"name" mapstructure:"name"`
-	Cause string `yaml:"cause" mapstructure:"cause"`
+	Name     string `yaml:"name" mapstructure:"name"`
+	Cause    string `yaml:"cause" mapstructure:"cause"`
+	Severity string `yaml:"severity" mapstructure:"severity"`
+}
+
+// GetSeverity returns the severity level for this prohibited package
+// Defaults to SeverityError if not specified or unrecognized
+func (p *ProhibitedPkg) GetSeverity() Severity {
+	if p.Severity == "" {
+		return SeverityError // Default to error for backward compatibility
+	}
+	return ParseSeverity(strings.ToLower(p.Severity))
 }
 
 func LoadConfig(fs afero.Fs, path string, cfgFile string) (Config, error) {

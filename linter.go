@@ -133,14 +133,16 @@ func (g *Goverhaul) hasCachedViolations(path string) []LintViolation {
 // lintFile lints a single Go file
 func (g *Goverhaul) lintFile(goFilePath string, violations *LintViolations) error {
 	g.logger.Debug("Analyzing file", "path", goFilePath)
-	imports, err := g.getImports(goFilePath)
+
+	// Use getImportsWithPositions to capture source locations for IDE integration
+	imports, err := g.getImportsWithPositions(goFilePath)
 	if err != nil {
 		g.logger.Error("Could not parse file", "path", goFilePath, "error", err)
 		// Continue with other files even if one fails to parse
 		return nil
 	}
 
-	g.logger.Debug("Imports found", "path", goFilePath, "imports", imports)
+	g.logger.Debug("Imports found", "path", goFilePath, "count", len(imports))
 
 	for _, rule := range g.cfg.Rules {
 		g.logger.Debug("Checking rule", "path", goFilePath, "rule_path", rule.Path, "applies", ruleAppliesToPath(rule, goFilePath))
@@ -150,7 +152,7 @@ func (g *Goverhaul) lintFile(goFilePath string, violations *LintViolations) erro
 
 		// Join the directory of the file being linted with the modfile name
 		modfilePath := JoinPaths(DirPath(goFilePath), g.cfg.Modfile)
-		fileViolations := g.checkImports(goFilePath, imports, rule, modfilePath)
+		fileViolations := g.checkImportsWithPositions(goFilePath, imports, rule, modfilePath)
 		for _, v := range fileViolations {
 			violations.Add(v)
 		}
@@ -236,7 +238,15 @@ func getModuleName(fs afero.Fs, modfilePath string) (string, error) {
 	return modulePath, nil
 }
 
+// ImportSpec represents an import with its source location
+// This is needed for IDE integration to highlight violations at the correct location
+type ImportSpec struct {
+	Path     string    // Import path (e.g., "fmt", "internal/pkg")
+	Position *Position // Source location in file
+}
+
 // getImportsWithFs gets imports from a Go file using afero.Fs
+// Deprecated: Use getImportsWithPositions for better IDE integration
 func (g *Goverhaul) getImports(path string) ([]string, error) {
 	fset := token.NewFileSet()
 
@@ -262,12 +272,87 @@ func (g *Goverhaul) getImports(path string) ([]string, error) {
 	return imports, nil
 }
 
+// getImportsWithPositions extracts all imports from a file with their source positions
+// This is needed for IDE integration to highlight violations at the correct location
+func (g *Goverhaul) getImportsWithPositions(path string) ([]ImportSpec, error) {
+	fset := token.NewFileSet()
+
+	// Read the file content using afero.Fs
+	content, err := afero.ReadFile(g.fs, path)
+	if err != nil {
+		return nil, WithDetails(WithFile(NewFSError("failed to read Go file", err), path),
+			"Make sure the file exists and is readable")
+	}
+
+	// Parse the file content using ImportsOnly mode for efficiency
+	file, err := parser.ParseFile(fset, path, content, parser.ImportsOnly)
+	if err != nil {
+		return nil, WithDetails(WithFile(NewParseError("failed to parse Go file", err), path),
+			"Make sure the file is a valid Go source file")
+	}
+
+	var imports []ImportSpec
+	for _, s := range file.Imports {
+		// Get position of the import path string (not the entire import statement)
+		pos := fset.Position(s.Path.Pos())
+		end := fset.Position(s.Path.End())
+
+		imports = append(imports, ImportSpec{
+			Path: strings.Trim(s.Path.Value, `"`),
+			Position: &Position{
+				Line:      pos.Line,
+				Column:    pos.Column,
+				Offset:    pos.Offset,
+				EndLine:   end.Line,
+				EndColumn: end.Column,
+			},
+		})
+	}
+
+	return imports, nil
+}
+
+// checkImportsWithPositions checks all imports in a file against a rule with position tracking
+// This version captures source positions for IDE integration
+func (g *Goverhaul) checkImportsWithPositions(path string, imports []ImportSpec, rule Rule, moduleName string) []LintViolation {
+	violations := make([]LintViolation, 0)
+
+	g.logger.Debug("Checking imports with positions", "path", path, "rule_path", rule.Path, "modfile_path", moduleName)
+
+	// Create a rule matcher with the provided file system
+	matcher := newRuleMatcherWithFs(rule, moduleName, g.fs)
+
+	g.logger.Debug("Rule matcher created", "path", path, "rule_path", rule.Path, "module_name", matcher.moduleName)
+	g.logger.Debug("Prohibited imports", "path", path, "prohibited", matcher.prohibitedMap)
+
+	// Normalize the path for consistent reporting
+	normalizedPath := NormalizePath(path)
+
+	// Check each import with position information
+	for _, importSpec := range imports {
+		g.logger.Debug("Checking import", "path", path, "import", importSpec.Path, "position", importSpec.Position)
+		violation := matcher.CheckImport(importSpec.Path, normalizedPath, g.logger, importSpec.Position)
+		if violation != nil {
+			g.logger.Debug("Violation found", "path", path, "import", importSpec.Path, "rule", rule.Path, "position", importSpec.Position)
+			violations = append(violations, *violation)
+		}
+	}
+
+	return violations
+}
+
+// prohibitedInfo holds the cause and severity for a prohibited import
+type prohibitedInfo struct {
+	cause    string
+	severity Severity
+}
+
 // RuleMatcher encapsulates the logic for matching imports against rules
 type RuleMatcher struct {
 	rule          Rule
 	moduleName    string
 	allowedSet    map[string]bool
-	prohibitedMap map[string]string
+	prohibitedMap map[string]prohibitedInfo
 }
 
 // newRuleMatcherWithFs creates a new RuleMatcher using a custom Fs
@@ -297,7 +382,7 @@ func newRuleMatcherWithFs(rule Rule, moduleNameOrPath string, fs afero.Fs) *Rule
 		rule:          rule,
 		moduleName:    moduleName,
 		allowedSet:    make(map[string]bool),
-		prohibitedMap: make(map[string]string),
+		prohibitedMap: make(map[string]prohibitedInfo),
 	}
 
 	// Prepare allowed set
@@ -313,12 +398,16 @@ func newRuleMatcherWithFs(rule Rule, moduleNameOrPath string, fs afero.Fs) *Rule
 
 	// Prepare prohibited map
 	for _, prohibited := range rule.Prohibited {
+		info := prohibitedInfo{
+			cause:    prohibited.Cause,
+			severity: prohibited.GetSeverity(),
+		}
 		// Add the original path to the prohibited map
-		matcher.prohibitedMap[prohibited.Name] = prohibited.Cause
+		matcher.prohibitedMap[prohibited.Name] = info
 
 		// Handle module-relative paths (only for simple paths without dots)
 		if !strings.Contains(prohibited.Name, ".") {
-			matcher.prohibitedMap[strings.Join([]string{moduleName, prohibited.Name}, "/")] = prohibited.Cause
+			matcher.prohibitedMap[strings.Join([]string{moduleName, prohibited.Name}, "/")] = info
 		}
 	}
 
@@ -326,23 +415,24 @@ func newRuleMatcherWithFs(rule Rule, moduleNameOrPath string, fs afero.Fs) *Rule
 }
 
 // IsProhibited checks if an import is prohibited by the rule
-func (m *RuleMatcher) IsProhibited(imp string) (string, bool) {
+// Returns the cause, severity, and whether the import is prohibited
+func (m *RuleMatcher) IsProhibited(imp string) (string, Severity, bool) {
 	// Direct lookup for exact match
-	if cause, exists := m.prohibitedMap[imp]; exists {
-		return cause, true
+	if info, exists := m.prohibitedMap[imp]; exists {
+		return info.cause, info.severity, true
 	}
 
 	// Check if the import path contains any of the prohibited paths
-	for prohibitedPath, cause := range m.prohibitedMap {
+	for prohibitedPath, info := range m.prohibitedMap {
 		// Skip module-prefixed paths to avoid duplicates
 		if strings.Contains(prohibitedPath, "/") && !strings.HasPrefix(prohibitedPath, m.moduleName) {
 			if strings.HasSuffix(imp, prohibitedPath) {
-				return cause, true
+				return info.cause, info.severity, true
 			}
 		}
 	}
 
-	return "", false
+	return "", SeverityError, false
 }
 
 // IsAllowed checks if an import is allowed by the rule
@@ -355,49 +445,57 @@ func (m *RuleMatcher) IsAllowed(imp string) bool {
 }
 
 // createViolation creates a LintViolation with the given parameters
-func createViolation(file, imp, rule, cause, details string) *LintViolation {
+func createViolation(file, imp, rule, cause, details string, severity Severity, position *Position) *LintViolation {
 	return &LintViolation{
-		File:    file,
-		Import:  imp,
-		Rule:    rule,
-		Cause:   cause,
-		Details: details,
+		File:     file,
+		Import:   imp,
+		Rule:     rule,
+		Cause:    cause,
+		Details:  details,
+		Severity: severity,
+		Position: position,
 	}
 }
 
 // logAndCreateViolation logs an error and creates a violation
-func (m *RuleMatcher) logAndCreateViolation(logger *slog.Logger, file, imp, message, cause, details string) *LintViolation {
+func (m *RuleMatcher) logAndCreateViolation(logger *slog.Logger, file, imp, message, cause, details string, severity Severity, position *Position) *LintViolation {
+	// Log based on severity level
+	logArgs := []any{"file", file, "import", imp, "severity", severity.String()}
 	if cause != "" {
-		logger.Error(message,
-			"file", file,
-			"import", imp,
-			"cause", cause)
-	} else {
-		logger.Error(message,
-			"file", file,
-			"import", imp)
+		logArgs = append(logArgs, "cause", cause)
 	}
 
-	return createViolation(file, imp, m.rule.Path, cause, details)
+	switch severity {
+	case SeverityError:
+		logger.Error(message, logArgs...)
+	case SeverityWarning:
+		logger.Warn(message, logArgs...)
+	case SeverityInfo, SeverityHint:
+		logger.Info(message, logArgs...)
+	}
+
+	return createViolation(file, imp, m.rule.Path, cause, details, severity, position)
 }
 
 // CheckImport checks a single import against the rule
-func (m *RuleMatcher) CheckImport(imp string, normalizedPath string, logger *slog.Logger) *LintViolation {
+// Position parameter is optional - pass nil if not available (backward compatibility)
+func (m *RuleMatcher) CheckImport(imp string, normalizedPath string, logger *slog.Logger, position *Position) *LintViolation {
 	// First check if the import is prohibited
-	cause, isProhibited := m.IsProhibited(imp)
+	cause, severity, isProhibited := m.IsProhibited(imp)
 	if isProhibited {
 		details := "This import is explicitly prohibited"
 		if cause != "" {
 			details += " with cause: " + cause
 		}
 
-		return m.logAndCreateViolation(logger, normalizedPath, imp, "Import is prohibited", cause, details)
+		return m.logAndCreateViolation(logger, normalizedPath, imp, "Import is prohibited", cause, details, severity, position)
 	}
 
 	// Then check if the import is allowed
 	if !m.IsAllowed(imp) {
 		details := "This import is not in the allowed list for this package"
-		return m.logAndCreateViolation(logger, normalizedPath, imp, "Import is not allowed", "", details)
+		// For "not allowed" violations, default to error severity
+		return m.logAndCreateViolation(logger, normalizedPath, imp, "Import is not allowed", "", details, SeverityError, position)
 	}
 
 	return nil
@@ -418,10 +516,10 @@ func (g *Goverhaul) checkImports(path string, imports []string, rule Rule, modul
 	// Normalize the path for consistent reporting
 	normalizedPath := NormalizePath(path)
 
-	// Check each import
+	// Check each import (without position information)
 	for _, imp := range imports {
 		g.logger.Debug("Checking import", "path", path, "import", imp)
-		violation := matcher.CheckImport(imp, normalizedPath, g.logger)
+		violation := matcher.CheckImport(imp, normalizedPath, g.logger, nil)
 		if violation != nil {
 			g.logger.Debug("Violation found", "path", path, "import", imp, "rule", rule.Path)
 			violations = append(violations, *violation)
